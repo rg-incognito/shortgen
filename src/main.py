@@ -22,7 +22,7 @@ MAX_RUNS = 2
 def main():
     service_account_info = json.loads(os.environ['GOOGLE_SERVICE_ACCOUNT_JSON'].lstrip('﻿'))
     gemini_api_key        = os.environ['GEMINI_API_KEY']
-    spreadsheet_id        = os.environ['SPREADSHEET_ID']
+    spreadsheet_id        = os.environ['SPREADSHEET_ID'].strip()
     whisper_model         = os.environ.get('WHISPER_MODEL', 'small')
 
     video_file_id = os.environ.get('VIDEO_FILE_ID', '').strip()
