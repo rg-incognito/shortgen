@@ -4,24 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       video_file_id:
-        description: 'Google Drive File ID of the source video'
-        required: true
-      output_folder_id:
-        description: 'Google Drive Folder ID to upload shorts into'
+        description: 'Drive File ID — leave blank to auto-pick from videos/ folder'
         required: false
-        default: '1kzFXWZQu8QQVtZKeAVvSgHcLaRFfK6tg'
+        default: ''
       episode_name:
-        description: 'Episode name used in output filenames (e.g. himym_s01e01)'
+        description: 'Episode name (e.g. friends_s01e01) — auto-detected if blank'
         required: false
-        default: 'episode'
+        default: ''
       whisper_model:
-        description: 'Whisper model size: base (fast) | small (better) | medium (best)'
+        description: 'Whisper model: base (fast) | small (accurate) | medium (best)'
         required: false
-        default: 'base'
+        default: 'small'
 
 # Required GitHub Secrets:
-#   GOOGLE_SERVICE_ACCOUNT_JSON  — full JSON of your service account key file
-#   GEMINI_API_KEY               — from https://aistudio.google.com/app/apikey
+#   GOOGLE_SERVICE_ACCOUNT_JSON  — full JSON of the service account key file
+#   GEMINI_API_KEY               — from aistudio.google.com/app/apikey
+#   SPREADSHEET_ID               — ID from the ShortGen Tracker sheet URL
 
 jobs:
   generate-shorts:
@@ -47,9 +45,12 @@ jobs:
       - name: Generate shorts
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          VIDEO_FILE_ID: ${{ github.event.inputs.video_file_id }}
-          OUTPUT_FOLDER_ID: ${{ github.event.inputs.output_folder_id }}
-          EPISODE_NAME: ${{ github.event.inputs.episode_name }}
-          WHISPER_MODEL: ${{ github.event.inputs.whisper_model }}
-        run: python src/main.py
+          GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
+          SPREADSHEET_ID:              ${{ secrets.SPREADSHEET_ID }}
+          VIDEO_FILE_ID:               ${{ github.event.inputs.video_file_id }}
+          EPISODE_NAME:                ${{ github.event.inputs.episode_name }}
+          WHISPER_MODEL:               ${{ github.event.inputs.whisper_model }}
+          # Folder IDs — hardcoded, change here if you restructure Drive
+          VIDEOS_FOLDER_ID:  '1bIFaNpfBy1Bp9R14T22EV-hMsYYrLeTS'
+          SHORTS_FOLDER_ID:  '1kzFXWZQu8QQVtZKeAVvSgHcLaRFfK6tg'
+          ARCHIVE_FOLDER_ID: '1nHZCaWO_KvkV52TekkF8ecC5JtIlXqJj'

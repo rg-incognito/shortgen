@@ -3,32 +3,38 @@ import re
 import time
 import google.generativeai as genai
 
-_PROMPT = """You are a video editor who creates viral short-form content from TV show episodes.
+_PROMPT = """You are a video editor who creates viral short-form content from the TV show Friends (US sitcom, 1994-2004).
 
-Analyze this timestamped transcript and identify the best segments for YouTube Shorts / Instagram Reels.
+Analyze this timestamped transcript and identify the best segments for YouTube Shorts / Instagram Reels (30-90 seconds each).
 
-Pick segments that are:
-- Standalone funny exchanges (land without heavy context)
-- Emotional reveals or confessions
-- Iconic one-liners or memorable moments
-- Clear setup + punchline structure
+Friends viral moment patterns — prioritize in this order:
+1. Chandler's sarcastic one-liners ("Could this BE any more...")
+2. Joey's food obsession, cluelessness, or lovably dumb moments
+3. Ross's overreactions, "WE WERE ON A BREAK!", dinosaur nerd tangents
+4. Monica's hyper-competitive or controlling moments
+5. Phoebe's bizarre songs, conspiracy beliefs, or non-sequiturs ("Smelly Cat", "Unagi")
+6. Rachel's fashion or relationship drama moments
+7. Physical comedy with a clear visual payoff
+8. Iconic recurring bits (Pivot!, The Routine, Unagi, etc.)
+9. Group banter with a tight setup + punchline
 
 Avoid:
-- Pure narrated exposition with no action
-- Scenes that only make sense mid-episode with no payoff
-- Repetitive or slow scenes
+- Pure scene-setting narration with no comedy or tension
+- Scenes requiring heavy context to make sense
+- Slow back-and-forth without a clear payoff
+- Segments overlapping these already-used timestamps: {used_segments}
 
 Transcript (format: [start_sec - end_sec] text):
 {transcript}
 
-Return ONLY a valid JSON array with no markdown fences or explanation:
+Return ONLY a valid JSON array — no markdown, no explanation:
 [
   {{
     "start_seconds": 45.2,
     "end_seconds": 87.0,
-    "title": "barney_suit_up",
+    "title": "joey_sandwich_crisis",
     "score": 9,
-    "reason": "Iconic suit up bit, works standalone"
+    "reason": "Joey food moment, works completely standalone"
   }}
 ]
 
@@ -37,10 +43,10 @@ Rules:
 - Each clip: 20-90 seconds long
 - Clips must NOT overlap
 - Score 1-10 for viral potential (10 = highest)
-- title: snake_case, max 30 chars, no spaces"""
+- title: snake_case, max 30 chars"""
 
 
-def analyze_transcript(segments, api_key, retries=3):
+def analyze_transcript(segments, api_key, used_segments=None, retries=3):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
 
@@ -49,17 +55,20 @@ def analyze_transcript(segments, api_key, retries=3):
         for s in segments
     )
 
-    prompt = _PROMPT.format(transcript=transcript_text)
+    used_str = (
+        ', '.join(f"{s:.0f}s-{e:.0f}s" for s, e in used_segments)
+        if used_segments else 'none'
+    )
+
+    prompt = _PROMPT.format(transcript=transcript_text, used_segments=used_str)
 
     for attempt in range(1, retries + 1):
         try:
             response = model.generate_content(prompt)
             raw = response.text.strip()
-            # Strip accidental markdown code fences
             raw = re.sub(r'^```(?:json)?\s*', '', raw, flags=re.MULTILINE)
             raw = re.sub(r'\s*```$', '', raw, flags=re.MULTILINE)
             clips = json.loads(raw)
-            # Sort highest score first
             return sorted(clips, key=lambda x: x['score'], reverse=True)
         except Exception as e:
             print(f"  Gemini attempt {attempt} failed: {e}")
