@@ -3,7 +3,7 @@ import re
 import time
 import requests
 
-_GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
+_GEMINI_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent'
 
 _PROMPT = """You are a video editor who creates viral short-form content from the TV show Friends (US sitcom, 1994-2004).
 
@@ -80,9 +80,13 @@ def analyze_transcript(segments, api_key, used_segments=None, retries=3):
             raw = re.sub(r'\s*```$', '', raw, flags=re.MULTILINE)
             clips = json.loads(raw)
             return sorted(clips, key=lambda x: x['score'], reverse=True)
+        except requests.HTTPError as e:
+            print(f"  Gemini attempt {attempt} failed: {e} — {e.response.text[:300]}")
+            if attempt < retries:
+                time.sleep(10)
         except Exception as e:
             print(f"  Gemini attempt {attempt} failed: {e}")
             if attempt < retries:
-                time.sleep(5)
+                time.sleep(10)
 
     raise RuntimeError("Gemini analysis failed after all retries")
