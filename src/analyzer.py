@@ -1,7 +1,9 @@
 import json
 import re
 import time
-import google.generativeai as genai
+import requests
+
+_GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
 
 _PROMPT = """You are a video editor who creates viral short-form content from the TV show Friends (US sitcom, 1994-2004).
 
@@ -47,25 +49,33 @@ Rules:
 
 
 def analyze_transcript(segments, api_key, used_segments=None, retries=3):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    api_key = api_key.strip()
 
     transcript_text = '\n'.join(
         f"[{s['start']} - {s['end']}] {s['text']}"
         for s in segments
     )
-
     used_str = (
         ', '.join(f"{s:.0f}s-{e:.0f}s" for s, e in used_segments)
         if used_segments else 'none'
     )
-
     prompt = _PROMPT.format(transcript=transcript_text, used_segments=used_str)
+
+    payload = {
+        'contents': [{'parts': [{'text': prompt}]}],
+        'generationConfig': {'temperature': 0.2},
+    }
 
     for attempt in range(1, retries + 1):
         try:
-            response = model.generate_content(prompt)
-            raw = response.text.strip()
+            resp = requests.post(
+                _GEMINI_URL,
+                params={'key': api_key},
+                json=payload,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            raw = resp.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             raw = re.sub(r'^```(?:json)?\s*', '', raw, flags=re.MULTILINE)
             raw = re.sub(r'\s*```$', '', raw, flags=re.MULTILINE)
             clips = json.loads(raw)
