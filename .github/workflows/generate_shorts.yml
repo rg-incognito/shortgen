@@ -1,0 +1,55 @@
+name: Generate Shorts
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_file_id:
+        description: 'Google Drive File ID of the source video'
+        required: true
+      output_folder_id:
+        description: 'Google Drive Folder ID to upload shorts into'
+        required: false
+        default: '1kzFXWZQu8QQVtZKeAVvSgHcLaRFfK6tg'
+      episode_name:
+        description: 'Episode name used in output filenames (e.g. himym_s01e01)'
+        required: false
+        default: 'episode'
+      whisper_model:
+        description: 'Whisper model size: base (fast) | small (better) | medium (best)'
+        required: false
+        default: 'base'
+
+# Required GitHub Secrets:
+#   GOOGLE_SERVICE_ACCOUNT_JSON  — full JSON of your service account key file
+#   GEMINI_API_KEY               — from https://aistudio.google.com/app/apikey
+
+jobs:
+  generate-shorts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install ffmpeg
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate shorts
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VIDEO_FILE_ID: ${{ github.event.inputs.video_file_id }}
+          OUTPUT_FOLDER_ID: ${{ github.event.inputs.output_folder_id }}
+          EPISODE_NAME: ${{ github.event.inputs.episode_name }}
+          WHISPER_MODEL: ${{ github.event.inputs.whisper_model }}
+        run: python src/main.py
