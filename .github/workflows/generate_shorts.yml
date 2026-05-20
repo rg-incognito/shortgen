@@ -47,7 +47,7 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
-          SPREADSHEET_ID:              ${{ secrets.SPREADSHEET_ID }}
+          SPREADSHEET_ID:              '1d-GID8JCIrw89ygIKXfsyT9Fe0qtxxmsUaKORuDliOM'
           VIDEO_FILE_ID:               ${{ github.event.inputs.video_file_id }}
           EPISODE_NAME:                ${{ github.event.inputs.episode_name }}
           WHISPER_MODEL:               ${{ github.event.inputs.whisper_model }}
