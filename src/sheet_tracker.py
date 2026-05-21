@@ -13,7 +13,7 @@ _POSTING_HEADERS  = [
     'yt_title', 'description', 'tags', 'pinned_comment',
     'status', 'scheduled_at', 'yt_url', 'created_at',
 ]
-_PUBLISH_HOUR_UTC = 9   # 9:00 AM UTC = 2:30 PM IST
+_PUBLISH_DELAY_MIN = 10  # publish this many minutes after upload
 
 
 class SheetTracker:
@@ -98,30 +98,8 @@ class SheetTracker:
         ).execute(num_retries=5)
 
     def get_next_publish_slot(self):
-        """Return next free ISO 8601 UTC publish time at _PUBLISH_HOUR_UTC."""
-        self._ensure_posting_sheet()
-        res = self._svc.spreadsheets().values().get(
-            spreadsheetId=self._sid,
-            range=f'{_POSTING_SHEET}!J:J',
-        ).execute(num_retries=5)
-        rows = res.get('values', [])
-
-        now    = datetime.datetime.utcnow()
-        latest = now
-        for row in rows[1:]:   # skip header
-            if row and row[0]:
-                try:
-                    dt = datetime.datetime.fromisoformat(row[0].rstrip('Z'))
-                    if dt > latest:
-                        latest = dt
-                except ValueError:
-                    pass
-
-        # Start from latest future slot; if nothing scheduled yet, use tomorrow
-        base = latest if latest > now else now
-        slot = base.replace(hour=_PUBLISH_HOUR_UTC, minute=0, second=0, microsecond=0)
-        if slot <= now or (latest > now and slot <= latest):
-            slot += datetime.timedelta(days=1)
+        """Return a publish time 10 minutes from now — video goes live shortly after upload."""
+        slot = datetime.datetime.utcnow() + datetime.timedelta(minutes=_PUBLISH_DELAY_MIN)
         return slot.strftime('%Y-%m-%dT%H:%M:%SZ')
 
     def update_yt_url(self, episode_name, run_number, storyline_title, yt_video_id, scheduled_at):
