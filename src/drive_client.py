@@ -62,10 +62,10 @@ def move_to_archive(file_id, archive_folder_id, videos_folder_id, credentials_in
 def download_video(file_id, output_path, credentials_info):
     request = _svc().files().get_media(fileId=file_id)
     with open(output_path, 'wb') as f:
-        dl = MediaIoBaseDownload(f, request, chunksize=50 * 1024 * 1024)
+        dl = MediaIoBaseDownload(f, request, chunksize=10 * 1024 * 1024)
         done = False
         while not done:
-            status, done = dl.next_chunk()
+            status, done = dl.next_chunk(num_retries=5)
             print(f"  Download {int(status.progress() * 100)}%")
 
 
