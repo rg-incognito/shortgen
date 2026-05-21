@@ -47,10 +47,11 @@ Rules:
 - 4 to 8 clips total
 - FIRST clip = hook (most viral moment, any timestamp)
 - LAST clip = payoff/punchline/resolution
-- Each clip: 3-15 seconds MAXIMUM — just the KEY line or reaction, nothing more
-- Total combined duration: 35-55 seconds
+- Each clip: 3-15 seconds — just the KEY line or reaction, nothing more
+- Total combined duration: 45-60 seconds
 - Clips (except the hook) should be in rough CHRONOLOGICAL ORDER
 - Clips must NOT overlap each other or the previously-used segments
+- CRITICAL: Every clip must end at a natural sentence or speech pause — NEVER cut mid-word or mid-sentence. Extend end_seconds by 1-2s if needed to catch the full line.
 - Pick moments with a clear spoken punchline or strong visual reaction
 - Score 1-10 for viral potential as a compiled reel (10 = highest)
 - storyline_title: snake_case, max 40 chars"""
