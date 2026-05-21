@@ -53,11 +53,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-torch202-${{ hashFiles('requirements.txt') }}
+          key: pip-torch201-${{ hashFiles('requirements.txt') }}
 
       - name: Install Python dependencies
         run: |
-          pip install torch==2.0.2+cpu torchaudio==2.0.2+cpu --index-url https://download.pytorch.org/whl/cpu
+          pip install torch==2.0.1+cpu torchaudio==2.0.1+cpu --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt
 
       - name: Cache HuggingFace models
