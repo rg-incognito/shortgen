@@ -48,7 +48,7 @@ Rules:
 - title: snake_case, max 30 chars"""
 
 
-def analyze_transcript(segments, api_key, used_segments=None, retries=3):
+def analyze_transcript(segments, api_key, used_segments=None, retries=5):
     api_key = api_key.strip()
 
     transcript_text = '\n'.join(
@@ -83,10 +83,11 @@ def analyze_transcript(segments, api_key, used_segments=None, retries=3):
         except requests.HTTPError as e:
             print(f"  Gemini attempt {attempt} failed: {e} — {e.response.text[:300]}")
             if attempt < retries:
-                time.sleep(10)
+                wait = 60 if e.response.status_code in (503, 429) else 15
+                time.sleep(wait)
         except Exception as e:
             print(f"  Gemini attempt {attempt} failed: {e}")
             if attempt < retries:
-                time.sleep(10)
+                time.sleep(15)
 
     raise RuntimeError("Gemini analysis failed after all retries")
