@@ -11,8 +11,12 @@ print('  Whisper done.')
 
 if hf_token:
     print('Pre-downloading pyannote/speaker-diarization-3.1...')
-    from pyannote.audio import Pipeline
-    Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', token=hf_token)
-    print('  Pyannote done.')
+    try:
+        from pyannote.audio import Pipeline
+        Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', token=hf_token)
+        print('  Pyannote done.')
+    except Exception as e:
+        print(f'  Pyannote download failed: {e}')
+        print('  Run will use face-only tracking. Accept all gated models on HuggingFace.')
 else:
     print('HF_TOKEN not set — skipping pyannote download (face-only tracking will be used).')
