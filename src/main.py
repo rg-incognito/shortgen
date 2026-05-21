@@ -75,11 +75,13 @@ def main():
 
         print("[3/5] Analyzing for best story arc (Gemini)...")
         story = analyze_transcript(segments, gemini_api_key, used_segments=used_segments)
-        print(f"      Story: [{story['score']}/10] {story['storyline_title']}")
+        total_sec = story.get('_total_seconds', 0)
+        print(f"      Story: [{story['score']}/10] {story['storyline_title']}  (~{total_sec:.0f}s total)")
         print(f"      Summary: {story['storyline_summary']}")
-        print(f"      {len(story['clips'])} parts:")
+        print(f"      {len(story['clips'])} clips:")
         for c in story['clips']:
-            print(f"        [{c['label']}] {c['start_seconds']:.0f}s-{c['end_seconds']:.0f}s — {c['description']}")
+            dur = c['end_seconds'] - c['start_seconds']
+            print(f"        [{c['label']}] {c['start_seconds']:.0f}s-{c['end_seconds']:.0f}s ({dur:.0f}s) — {c['description']}")
 
         shorts_dir = work_dir / 'shorts'
         shorts_dir.mkdir()

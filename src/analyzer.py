@@ -7,45 +7,52 @@ _GEMINI_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-fl
 
 _PROMPT = """You are a viral short-form video editor working with Friends (US sitcom, 1994-2004).
 
-Your task: Find the SINGLE BEST storyline in this episode — one continuous subplot, running joke, or character arc — and identify ALL scene segments from across the whole episode that build and pay it off.
+Your task: Create a ~45-second reel that tells ONE complete storyline in tight, punchy cuts — like a TikTok story recap.
 
-The output will be ONE compiled video. ALL selected clips must belong to the SAME storyline and together tell a complete story: setup → escalation → payoff (and aftermath if present).
+OUTPUT STRUCTURE (strictly in this order):
+1. HOOK (first clip, 4-8 sec) — the single most shocking/funny/relatable moment from the ENTIRE storyline. Does NOT need to be the chronological start. This must grab attention in the first second. E.g. the punchline reaction, the embarrassing confession, the loudest laugh moment.
+2. CONTEXT clips (3-5 clips, 3-8 sec each) — the minimum lines needed to understand the story. Only the KEY line or reaction from each scene beat. Cut everything else.
+3. PAYOFF (last clip, 4-8 sec) — the final punchline, resolution, or biggest laugh.
 
-Great storylines to look for (in priority order):
-1. A character does something embarrassing/dumb that escalates across scenes (e.g. Ross can't cancel gym membership, Joey eats someone's sandwich, Chandler lies and digs deeper)
-2. Phoebe's bizarre behaviour that culminates in an absurd payoff (biting a client, Smelly Cat negotiation, Unagi)
-3. A scheme or deception that gradually unravels with group reactions
-4. A physical comedy bit that builds across multiple scenes
-5. A misunderstanding that compounds throughout the episode
-6. One character trying (and failing) to teach or change another
+TOTAL target: 35-55 seconds across all clips combined.
+
+Great storylines to look for:
+1. A character does something embarrassing/dumb that escalates (Ross, Joey, Chandler)
+2. Phoebe's bizarre behaviour with an absurd payoff
+3. A lie or scheme that unravels with great reaction shots
+4. A misunderstanding that snowballs
+5. Physical comedy with a clear punchline
 
 Transcript (format: [start_sec - end_sec] text):
 {transcript}
 
-Previously used segments (AVOID all of these — do not include any clip that overlaps with them): {used_segments}
+Previously used segments (AVOID these): {used_segments}
 
 Return ONLY a valid JSON object — no markdown, no explanation:
 {{
   "storyline_title": "phoebe_bites_massage_client",
-  "storyline_summary": "Phoebe bites her massage client, panics, tries to hide it, then confesses — plus the group's reactions",
+  "storyline_summary": "Phoebe bites her client, panics, the gang reacts, she confesses",
   "clips": [
     {{
-      "start_seconds": 45.2,
-      "end_seconds": 87.0,
-      "label": "setup",
-      "description": "Phoebe introduces her unorthodox massage philosophy to the gang"
+      "start_seconds": 87.0,
+      "end_seconds": 92.0,
+      "label": "hook",
+      "description": "Joey's face when he realises Phoebe actually bit someone"
     }}
   ],
   "score": 9
 }}
 
 Rules:
-- 3 to 8 clips in CHRONOLOGICAL ORDER
-- Each clip: 10-90 seconds long
+- 4 to 8 clips total
+- FIRST clip = hook (most viral moment, any timestamp)
+- LAST clip = payoff/punchline/resolution
+- Each clip: 3-15 seconds MAXIMUM — just the KEY line or reaction, nothing more
+- Total combined duration: 35-55 seconds
+- Clips (except the hook) should be in rough CHRONOLOGICAL ORDER
 - Clips must NOT overlap each other or the previously-used segments
-- First clip must establish the premise/setup
-- Last clip must deliver a clear payoff or resolution
-- Score 1-10 for viral potential as a compiled story (10 = highest)
+- Pick moments with a clear spoken punchline or strong visual reaction
+- Score 1-10 for viral potential as a compiled reel (10 = highest)
 - storyline_title: snake_case, max 40 chars"""
 
 
@@ -80,6 +87,9 @@ def analyze_transcript(segments, api_key, used_segments=None, retries=5):
             raw = re.sub(r'^```(?:json)?\s*', '', raw, flags=re.MULTILINE)
             raw = re.sub(r'\s*```$', '', raw, flags=re.MULTILINE)
             story = json.loads(raw)
+            # Log total duration so we can sanity-check
+            total = sum(c['end_seconds'] - c['start_seconds'] for c in story['clips'])
+            story['_total_seconds'] = round(total, 1)
             return story
         except requests.HTTPError as e:
             print(f"  Gemini attempt {attempt} failed: {e} — {e.response.text[:300]}")
