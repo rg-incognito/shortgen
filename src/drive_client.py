@@ -1,19 +1,10 @@
 import os
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
-from google.oauth2 import service_account, credentials as oauth2_credentials
-
-_SCOPES = ['https://www.googleapis.com/auth/drive']
+from google.oauth2 import credentials as oauth2_credentials
 
 
-def _service(credentials_info):
-    creds = service_account.Credentials.from_service_account_info(
-        credentials_info, scopes=_SCOPES
-    )
-    return build('drive', 'v3', credentials=creds)
-
-
-def _oauth_service():
+def _svc():
     creds = oauth2_credentials.Credentials(
         token=None,
         refresh_token=os.environ['GOOGLE_REFRESH_TOKEN'],
@@ -25,13 +16,10 @@ def _oauth_service():
 
 
 def list_videos(folder_id, credentials_info):
-    svc = _service(credentials_info)
-    res = svc.files().list(
+    res = _svc().files().list(
         q=f"'{folder_id}' in parents and mimeType contains 'video/' and trashed=false",
         fields='files(id, name)',
         orderBy='name',
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True,
     ).execute()
     return [(f['id'], f['name']) for f in res.get('files', [])]
 
@@ -63,19 +51,16 @@ def pick_video(folder_id, credentials_info, tracker):
 
 
 def move_to_archive(file_id, archive_folder_id, videos_folder_id, credentials_info):
-    svc = _service(credentials_info)
-    svc.files().update(
+    _svc().files().update(
         fileId=file_id,
         addParents=archive_folder_id,
         removeParents=videos_folder_id,
         fields='id, parents',
-        supportsAllDrives=True,
     ).execute()
 
 
 def download_video(file_id, output_path, credentials_info):
-    svc = _service(credentials_info)
-    request = svc.files().get_media(fileId=file_id, supportsAllDrives=True)
+    request = _svc().files().get_media(fileId=file_id)
     with open(output_path, 'wb') as f:
         dl = MediaIoBaseDownload(f, request, chunksize=50 * 1024 * 1024)
         done = False
@@ -85,7 +70,7 @@ def download_video(file_id, output_path, credentials_info):
 
 
 def upload_shorts(file_paths, folder_id, credentials_info):
-    svc = _oauth_service()
+    svc = _svc()
     for path in file_paths:
         name = os.path.basename(path)
         metadata = {'name': name, 'parents': [folder_id]}
