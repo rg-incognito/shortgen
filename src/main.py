@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from drive_client import download_video, upload_shorts, pick_video, move_to_archive
 from transcriber import transcribe_video
-from analyzer import analyze_transcript
+from analyzer import analyze_transcript, generate_yt_metadata
 from clipper import create_story_short
 from sheet_tracker import SheetTracker
 
@@ -83,6 +83,11 @@ def main():
             dur = c['end_seconds'] - c['start_seconds']
             print(f"        [{c['label']}] {c['start_seconds']:.0f}s-{c['end_seconds']:.0f}s ({dur:.0f}s) — {c['description']}")
 
+        print("      Generating YouTube metadata...")
+        yt_meta = generate_yt_metadata(story, episode_name, gemini_api_key)
+        if yt_meta:
+            print(f"      YT title: {yt_meta.get('title', '')}")
+
         shorts_dir = work_dir / 'shorts'
         shorts_dir.mkdir()
         print("[4/5] Creating story compilation...")
@@ -105,6 +110,8 @@ def main():
             for i, c in enumerate(story['clips'])
         ]
         tracker.log_clips(episode_name, current_run, clips_for_log)
+        if yt_meta:
+            tracker.log_posting_metadata(episode_name, current_run, story, yt_meta)
         print(f"      Logged run {current_run} to tracker sheet")
 
         if current_run >= MAX_RUNS:

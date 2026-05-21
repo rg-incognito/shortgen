@@ -7,6 +7,13 @@ _HEADERS = ['episode_name', 'run_number', 'clip_title',
             'start_seconds', 'end_seconds', 'score', 'reason', 'created_at']
 _RANGE = 'A:H'
 
+_POSTING_SHEET   = 'PostingTracker'
+_POSTING_HEADERS = [
+    'episode_name', 'run_number', 'storyline_title', 'score',
+    'yt_title', 'description', 'tags', 'pinned_comment',
+    'status', 'upload_date', 'yt_url', 'created_at',
+]
+
 
 class SheetTracker:
     def __init__(self, credentials_info, spreadsheet_id):
@@ -49,6 +56,45 @@ class SheetTracker:
                 except (ValueError, IndexError):
                     pass
         return segs
+
+    def _ensure_posting_sheet(self):
+        meta   = self._svc.spreadsheets().get(spreadsheetId=self._sid).execute(num_retries=5)
+        titles = [s['properties']['title'] for s in meta['sheets']]
+        if _POSTING_SHEET not in titles:
+            self._svc.spreadsheets().batchUpdate(
+                spreadsheetId=self._sid,
+                body={'requests': [{'addSheet': {'properties': {'title': _POSTING_SHEET}}}]},
+            ).execute(num_retries=5)
+            self._svc.spreadsheets().values().update(
+                spreadsheetId=self._sid,
+                range=f'{_POSTING_SHEET}!A1',
+                valueInputOption='RAW',
+                body={'values': [_POSTING_HEADERS]},
+            ).execute(num_retries=5)
+
+    def log_posting_metadata(self, episode_name, run_number, story, yt_meta):
+        self._ensure_posting_sheet()
+        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+        row = [
+            episode_name,
+            str(run_number),
+            story['storyline_title'],
+            str(story['score']),
+            yt_meta.get('title', ''),
+            yt_meta.get('description', ''),
+            yt_meta.get('tags', ''),
+            yt_meta.get('pinned_comment', ''),
+            'Pending',
+            '',   # upload_date — fill in manually after posting
+            '',   # yt_url     — fill in manually after posting
+            now,
+        ]
+        self._svc.spreadsheets().values().append(
+            spreadsheetId=self._sid,
+            range=f'{_POSTING_SHEET}!A:L',
+            valueInputOption='RAW',
+            body={'values': [row]},
+        ).execute(num_retries=5)
 
     def log_clips(self, episode_name, run_number, clips):
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')

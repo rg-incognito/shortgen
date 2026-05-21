@@ -57,6 +57,66 @@ Rules:
 - storyline_title: snake_case, max 40 chars"""
 
 
+_YT_PROMPT = """You are a YouTube content strategist for a Friends (US sitcom, 1994-2004) clips channel called "The One Where".
+
+Generate YouTube metadata for a short-form vertical reel (under 60 seconds).
+
+Episode : {episode_str}
+Storyline: {storyline}
+Summary  : {summary}
+Score    : {score}/10
+
+Return ONLY valid JSON, no markdown:
+{{
+  "title": "Phoebe bites her massage client 😭 | Friends S4E4",
+  "description": "Phoebe actually bites someone during a massage — and the gang's reaction is everything.\\n\\nFriends Season 4, Episode 4 | \\"The One with the Ballroom Dancing\\"\\n\\n📌 Subscribe for daily Friends story reels — the funniest moments cut down to under a minute.\\n\\n#Friends #Phoebe #FriendsTV #PhoebeBuffay #FriendsClips #TVShows #Sitcom #FunnyMoments #90sTV #FriendsReels",
+  "tags": "Friends, Friends TV show, Phoebe Buffay, Friends clips, Friends funny moments, Friends Season 4, sitcom, 90s TV, Lisa Kudrow, Friends compilation, massage, Friends shorts, comedy, NBC, Friends rewatch",
+  "pinned_comment": "Phoebe really said bite first, apologise never 😭 Which Friends character causes the most chaos? 👇"
+}}
+
+Rules:
+- title: max 70 chars, punchy hook, episode code (e.g. S4E4), exactly 1 emoji
+- description: 2-line punchy hook → blank line → episode info line → blank line → subscribe CTA line → blank line → exactly 10 hashtags on one line
+- tags: exactly 15 tags, comma-separated, mix of broad (Friends) and specific (character, theme)
+- pinned_comment: funny/relatable observation + engagement question + 1 emoji + 👇"""
+
+
+def generate_yt_metadata(story, episode_name, api_key, retries=3):
+    import re
+    api_key = api_key.strip()
+    m = re.search(r'[Ss](\d+)[Ee](\d+)', episode_name)
+    ep_str = f"S{int(m.group(1))}E{int(m.group(2))}" if m else episode_name
+
+    prompt = _YT_PROMPT.format(
+        episode_str=ep_str,
+        storyline=story['storyline_title'].replace('_', ' '),
+        summary=story['storyline_summary'],
+        score=story['score'],
+    )
+    payload = {
+        'contents': [{'parts': [{'text': prompt}]}],
+        'generationConfig': {'temperature': 0.7},
+    }
+    for attempt in range(1, retries + 1):
+        try:
+            resp = requests.post(
+                _GEMINI_URL,
+                params={'key': api_key},
+                json=payload,
+                timeout=60,
+            )
+            resp.raise_for_status()
+            raw = resp.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            raw = re.sub(r'^```(?:json)?\s*', '', raw, flags=re.MULTILINE)
+            raw = re.sub(r'\s*```$', '', raw, flags=re.MULTILINE)
+            return json.loads(raw)
+        except Exception as e:
+            print(f"  YT metadata attempt {attempt} failed: {e}")
+            if attempt < retries:
+                time.sleep(10)
+    return None
+
+
 def analyze_transcript(segments, api_key, used_segments=None, retries=5):
     api_key = api_key.strip()
 
