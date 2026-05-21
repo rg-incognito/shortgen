@@ -28,6 +28,9 @@ _FACE_BOT  = 152
 
 
 def load_diarization_pipeline(hf_token: str):
+    import torchaudio
+    if not hasattr(torchaudio, 'set_audio_backend'):
+        torchaudio.set_audio_backend = lambda *a, **k: None
     from pyannote.audio import Pipeline
     print('  Loading pyannote diarization model...')
     pipe = Pipeline.from_pretrained(
