@@ -83,19 +83,26 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return header
 
     events = []
-    BLOCK = 4
+    BLOCK       = 4
+    MAX_WORD_S  = 0.9   # max seconds any single word stays highlighted
 
     # Group words into blocks of 4
     blocks = [mapped_words[i:i + BLOCK] for i in range(0, len(mapped_words), BLOCK)]
 
-    for block in blocks:
-        block_start = block[0]['start']
-        block_end   = block[-1]['end']
+    for b_idx, block in enumerate(blocks):
+        # Cap block end so it never bleeds into the next block
+        next_block_start = blocks[b_idx + 1][0]['start'] if b_idx + 1 < len(blocks) else None
+        block_end = min(block[-1]['end'], block[-1]['start'] + MAX_WORD_S)
+        if next_block_start is not None:
+            block_end = min(block_end, next_block_start)
 
         for active_idx, active_word in enumerate(block):
-            # Each word is active from its own start to the next word's start
             seg_start = active_word['start']
-            seg_end   = block[active_idx + 1]['start'] if active_idx + 1 < len(block) else block_end
+            if active_idx + 1 < len(block):
+                # cap intra-block gap too — handles long pauses between words
+                seg_end = min(block[active_idx + 1]['start'], active_word['start'] + MAX_WORD_S)
+            else:
+                seg_end = block_end
 
             if seg_end <= seg_start:
                 seg_end = seg_start + 0.05
