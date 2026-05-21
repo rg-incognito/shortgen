@@ -60,7 +60,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          uv pip install --system "torch==2.0.2" "torchaudio==2.0.2" --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --system "torch==2.0.2+cpu" "torchaudio==2.0.2+cpu" --index-url https://download.pytorch.org/whl/cpu
           uv pip install --system -r requirements.txt
 
       - name: Cache HuggingFace models
