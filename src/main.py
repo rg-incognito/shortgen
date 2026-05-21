@@ -99,8 +99,9 @@ def main():
         uploaded = upload_shorts([short_path], SHORTS_FOLDER_ID, service_account_info)
         drive_file_id = uploaded[0][1] if uploaded else None
 
-        # Upload to YouTube as a scheduled post
-        if yt_meta:
+        # Upload to YouTube as a scheduled post (requires YOUTUBE_CHANNEL_ID secret)
+        yt_channel_id = os.environ.get('YOUTUBE_CHANNEL_ID', '').strip()
+        if yt_meta and yt_channel_id:
             try:
                 from youtube_client import upload_scheduled
                 publish_at = tracker.get_next_publish_slot()
@@ -117,6 +118,8 @@ def main():
                                       story['storyline_title'], yt_video_id, publish_at)
             except Exception as e:
                 print(f"      YouTube upload skipped: {e}")
+        elif yt_meta:
+            print("      YouTube: YOUTUBE_CHANNEL_ID not set — metadata saved to sheet, post manually")
 
         # Move the uploaded short to shorts/used/
         if drive_file_id:
