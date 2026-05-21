@@ -36,11 +36,25 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      - name: Cache ffmpeg
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: /usr/bin/ffmpeg
+          key: ffmpeg-ubuntu-latest
+
       - name: Install ffmpeg
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: sudo apt-get install -y ffmpeg
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
+
+      - name: Cache Whisper model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: whisper-${{ github.event.inputs.whisper_model || 'small' }}
 
       - name: Generate shorts
         run: python src/main.py
