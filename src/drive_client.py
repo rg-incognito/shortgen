@@ -18,7 +18,9 @@ def list_videos(folder_id, credentials_info):
     res = svc.files().list(
         q=f"'{folder_id}' in parents and mimeType contains 'video/' and trashed=false",
         fields='files(id, name)',
-        orderBy='name'
+        orderBy='name',
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
     ).execute()
     return [(f['id'], f['name']) for f in res.get('files', [])]
 
@@ -55,13 +57,14 @@ def move_to_archive(file_id, archive_folder_id, videos_folder_id, credentials_in
         fileId=file_id,
         addParents=archive_folder_id,
         removeParents=videos_folder_id,
-        fields='id, parents'
+        fields='id, parents',
+        supportsAllDrives=True,
     ).execute()
 
 
 def download_video(file_id, output_path, credentials_info):
     svc = _service(credentials_info)
-    request = svc.files().get_media(fileId=file_id)
+    request = svc.files().get_media(fileId=file_id, supportsAllDrives=True)
     with open(output_path, 'wb') as f:
         dl = MediaIoBaseDownload(f, request, chunksize=50 * 1024 * 1024)
         done = False
@@ -77,6 +80,7 @@ def upload_shorts(file_paths, folder_id, credentials_info):
         metadata = {'name': name, 'parents': [folder_id]}
         media = MediaFileUpload(path, mimetype='video/mp4', resumable=True)
         result = svc.files().create(
-            body=metadata, media_body=media, fields='id'
+            body=metadata, media_body=media, fields='id',
+            supportsAllDrives=True,
         ).execute()
         print(f"  Uploaded {name} → {result.get('id')}")
