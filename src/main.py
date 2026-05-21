@@ -70,8 +70,8 @@ def main():
         print(f"      {video_path.stat().st_size / 1e6:.1f} MB")
 
         print(f"[2/5] Transcribing with whisper-{whisper_model}...")
-        segments = transcribe_video(str(video_path), model_size=whisper_model)
-        print(f"      {len(segments)} segments transcribed")
+        segments, all_words = transcribe_video(str(video_path), model_size=whisper_model)
+        print(f"      {len(segments)} segments, {len(all_words)} words transcribed")
 
         print("[3/5] Analyzing for best story arc (Gemini)...")
         story = analyze_transcript(segments, gemini_api_key, used_segments=used_segments)
@@ -87,7 +87,8 @@ def main():
         shorts_dir.mkdir()
         print("[4/5] Creating story compilation...")
         short_path = create_story_short(str(video_path), story, str(shorts_dir),
-                                        episode_name, pipeline=diarization_pipeline)
+                                        episode_name, pipeline=diarization_pipeline,
+                                        all_words=all_words)
 
         print("[5/5] Uploading to Drive...")
         upload_shorts([short_path], SHORTS_FOLDER_ID, service_account_info)
