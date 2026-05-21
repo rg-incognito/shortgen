@@ -5,47 +5,48 @@ import requests
 
 _GEMINI_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent'
 
-_PROMPT = """You are a video editor who creates viral short-form content from the TV show Friends (US sitcom, 1994-2004).
+_PROMPT = """You are a viral short-form video editor working with Friends (US sitcom, 1994-2004).
 
-Analyze this timestamped transcript and identify the best segments for YouTube Shorts / Instagram Reels (30-90 seconds each).
+Your task: Find the SINGLE BEST storyline in this episode — one continuous subplot, running joke, or character arc — and identify ALL scene segments from across the whole episode that build and pay it off.
 
-Friends viral moment patterns — prioritize in this order:
-1. Chandler's sarcastic one-liners ("Could this BE any more...")
-2. Joey's food obsession, cluelessness, or lovably dumb moments
-3. Ross's overreactions, "WE WERE ON A BREAK!", dinosaur nerd tangents
-4. Monica's hyper-competitive or controlling moments
-5. Phoebe's bizarre songs, conspiracy beliefs, or non-sequiturs ("Smelly Cat", "Unagi")
-6. Rachel's fashion or relationship drama moments
-7. Physical comedy with a clear visual payoff
-8. Iconic recurring bits (Pivot!, The Routine, Unagi, etc.)
-9. Group banter with a tight setup + punchline
+The output will be ONE compiled video. ALL selected clips must belong to the SAME storyline and together tell a complete story: setup → escalation → payoff (and aftermath if present).
 
-Avoid:
-- Pure scene-setting narration with no comedy or tension
-- Scenes requiring heavy context to make sense
-- Slow back-and-forth without a clear payoff
-- Segments overlapping these already-used timestamps: {used_segments}
+Great storylines to look for (in priority order):
+1. A character does something embarrassing/dumb that escalates across scenes (e.g. Ross can't cancel gym membership, Joey eats someone's sandwich, Chandler lies and digs deeper)
+2. Phoebe's bizarre behaviour that culminates in an absurd payoff (biting a client, Smelly Cat negotiation, Unagi)
+3. A scheme or deception that gradually unravels with group reactions
+4. A physical comedy bit that builds across multiple scenes
+5. A misunderstanding that compounds throughout the episode
+6. One character trying (and failing) to teach or change another
 
 Transcript (format: [start_sec - end_sec] text):
 {transcript}
 
-Return ONLY a valid JSON array — no markdown, no explanation:
-[
-  {{
-    "start_seconds": 45.2,
-    "end_seconds": 87.0,
-    "title": "joey_sandwich_crisis",
-    "score": 9,
-    "reason": "Joey food moment, works completely standalone"
-  }}
-]
+Previously used segments (AVOID all of these — do not include any clip that overlaps with them): {used_segments}
+
+Return ONLY a valid JSON object — no markdown, no explanation:
+{{
+  "storyline_title": "phoebe_bites_massage_client",
+  "storyline_summary": "Phoebe bites her massage client, panics, tries to hide it, then confesses — plus the group's reactions",
+  "clips": [
+    {{
+      "start_seconds": 45.2,
+      "end_seconds": 87.0,
+      "label": "setup",
+      "description": "Phoebe introduces her unorthodox massage philosophy to the gang"
+    }}
+  ],
+  "score": 9
+}}
 
 Rules:
-- 3 to 6 clips total
-- Each clip: 20-90 seconds long
-- Clips must NOT overlap
-- Score 1-10 for viral potential (10 = highest)
-- title: snake_case, max 30 chars"""
+- 3 to 8 clips in CHRONOLOGICAL ORDER
+- Each clip: 10-90 seconds long
+- Clips must NOT overlap each other or the previously-used segments
+- First clip must establish the premise/setup
+- Last clip must deliver a clear payoff or resolution
+- Score 1-10 for viral potential as a compiled story (10 = highest)
+- storyline_title: snake_case, max 40 chars"""
 
 
 def analyze_transcript(segments, api_key, used_segments=None, retries=5):
@@ -78,8 +79,8 @@ def analyze_transcript(segments, api_key, used_segments=None, retries=5):
             raw = resp.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             raw = re.sub(r'^```(?:json)?\s*', '', raw, flags=re.MULTILINE)
             raw = re.sub(r'\s*```$', '', raw, flags=re.MULTILINE)
-            clips = json.loads(raw)
-            return sorted(clips, key=lambda x: x['score'], reverse=True)
+            story = json.loads(raw)
+            return story
         except requests.HTTPError as e:
             print(f"  Gemini attempt {attempt} failed: {e} — {e.response.text[:300]}")
             if attempt < retries:

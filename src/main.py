@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from drive_client import download_video, upload_shorts, pick_video, move_to_archive
 from transcriber import transcribe_video
 from analyzer import analyze_transcript
-from clipper import create_shorts
+from clipper import create_story_short
 from sheet_tracker import SheetTracker
 
 VIDEOS_FOLDER_ID  = os.environ.get('VIDEOS_FOLDER_ID',  '1bIFaNpfBy1Bp9R14T22EV-hMsYYrLeTS')
@@ -36,6 +36,7 @@ def main():
         try:
             from reframer import load_diarization_pipeline
             diarization_pipeline = load_diarization_pipeline(hf_token)
+            print('  Diarization pipeline loaded (speaker-aware tracking active)')
         except Exception as e:
             print(f'  Diarization pipeline unavailable: {e} — using face-only tracking')
 
@@ -64,7 +65,7 @@ def main():
     try:
         video_path = work_dir / f"{episode_name}.mp4"
 
-        print(f"[1/5] Downloading video...")
+        print("[1/5] Downloading video...")
         download_video(video_file_id, str(video_path), service_account_info)
         print(f"      {video_path.stat().st_size / 1e6:.1f} MB")
 
@@ -72,22 +73,35 @@ def main():
         segments = transcribe_video(str(video_path), model_size=whisper_model)
         print(f"      {len(segments)} segments transcribed")
 
-        print("[3/5] Analyzing for viral moments (Gemini)...")
-        clips = analyze_transcript(segments, gemini_api_key, used_segments=used_segments)
-        print(f"      {len(clips)} clips selected:")
-        for c in clips:
-            print(f"        [{c['score']}/10] {c['title']}  {c['start_seconds']:.0f}s-{c['end_seconds']:.0f}s — {c['reason']}")
+        print("[3/5] Analyzing for best story arc (Gemini)...")
+        story = analyze_transcript(segments, gemini_api_key, used_segments=used_segments)
+        print(f"      Story: [{story['score']}/10] {story['storyline_title']}")
+        print(f"      Summary: {story['storyline_summary']}")
+        print(f"      {len(story['clips'])} parts:")
+        for c in story['clips']:
+            print(f"        [{c['label']}] {c['start_seconds']:.0f}s-{c['end_seconds']:.0f}s — {c['description']}")
 
         shorts_dir = work_dir / 'shorts'
         shorts_dir.mkdir()
-        print("[4/5] Creating shorts...")
-        short_paths = create_shorts(str(video_path), clips, str(shorts_dir), episode_name,
-                                    pipeline=diarization_pipeline)
+        print("[4/5] Creating story compilation...")
+        short_path = create_story_short(str(video_path), story, str(shorts_dir),
+                                        episode_name, pipeline=diarization_pipeline)
 
-        print(f"[5/5] Uploading {len(short_paths)} shorts to Drive...")
-        upload_shorts(short_paths, SHORTS_FOLDER_ID, service_account_info)
+        print("[5/5] Uploading to Drive...")
+        upload_shorts([short_path], SHORTS_FOLDER_ID, service_account_info)
 
-        tracker.log_clips(episode_name, current_run, clips)
+        # Log each clip segment individually so future runs avoid them all
+        clips_for_log = [
+            {
+                'title':         f"{story['storyline_title']}_p{i + 1}",
+                'start_seconds': c['start_seconds'],
+                'end_seconds':   c['end_seconds'],
+                'score':         story['score'],
+                'reason':        c['description'],
+            }
+            for i, c in enumerate(story['clips'])
+        ]
+        tracker.log_clips(episode_name, current_run, clips_for_log)
         print(f"      Logged run {current_run} to tracker sheet")
 
         if current_run >= MAX_RUNS:
@@ -95,7 +109,7 @@ def main():
             move_to_archive(video_file_id, ARCHIVE_FOLDER_ID, VIDEOS_FOLDER_ID, service_account_info)
             print(f"      Moved to archive/")
 
-        print(f"\nDone! {len(short_paths)} shorts in Drive → series_shorts/shorts/")
+        print(f"\nDone! 1 story short in Drive → series_shorts/shorts/")
 
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
