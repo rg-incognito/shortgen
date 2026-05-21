@@ -20,19 +20,19 @@ class SheetTracker:
     def _ensure_headers(self):
         res = self._svc.spreadsheets().values().get(
             spreadsheetId=self._sid, range='A1:H1'
-        ).execute()
+        ).execute(num_retries=5)
         if not res.get('values'):
             self._svc.spreadsheets().values().update(
                 spreadsheetId=self._sid,
                 range='A1',
                 valueInputOption='RAW',
                 body={'values': [_HEADERS]}
-            ).execute()
+            ).execute(num_retries=5)
 
     def _rows(self):
         res = self._svc.spreadsheets().values().get(
             spreadsheetId=self._sid, range=_RANGE
-        ).execute()
+        ).execute(num_retries=5)
         rows = res.get('values', [])
         return rows[1:] if len(rows) > 1 else []
 
@@ -63,4 +63,4 @@ class SheetTracker:
             range=_RANGE,
             valueInputOption='RAW',
             body={'values': rows}
-        ).execute()
+        ).execute(num_retries=5)

@@ -56,7 +56,7 @@ def move_to_archive(file_id, archive_folder_id, videos_folder_id, credentials_in
         addParents=archive_folder_id,
         removeParents=videos_folder_id,
         fields='id, parents',
-    ).execute()
+    ).execute(num_retries=5)
 
 
 def download_video(file_id, output_path, credentials_info):
