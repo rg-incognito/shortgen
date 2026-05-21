@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import numpy as np
 import cv2
-import mediapipe as mp
+from mediapipe.python.solutions import face_mesh as _mp_face_mesh
 
 _OUT_W, _OUT_H = 1080, 1920
 _SAMPLE_FPS   = 3      # face-detection samples per second of source video
@@ -67,7 +67,7 @@ def _sample_faces(video_path, start_sec, end_sec, src_fps) -> dict:
     cap = cv2.VideoCapture(video_path)
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
 
-    face_mesh = mp.solutions.face_mesh.FaceMesh(
+    face_mesh = _mp_face_mesh.FaceMesh(
         max_num_faces=6,
         refine_landmarks=False,
         min_detection_confidence=0.5,
