@@ -1,26 +1,25 @@
 """YouTube Data API v3 — upload a vertical short as a scheduled private post."""
+import json
 import os
+import tempfile
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
-_SCOPES = [
-    'https://www.googleapis.com/auth/drive',
-    'https://www.googleapis.com/auth/youtube.upload',
-]
+_SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
+_TOKEN_FILE = os.path.join(os.path.dirname(__file__), '..', 'yt_token.json')
 
 
 def _build_svc():
-    creds = Credentials(
-        token=None,
-        refresh_token=os.environ['GOOGLE_REFRESH_TOKEN'],
-        token_uri='https://oauth2.googleapis.com/token',
-        client_id=os.environ['GOOGLE_CLIENT_ID'],
-        client_secret=os.environ['GOOGLE_CLIENT_SECRET'],
-        scopes=_SCOPES,
-    )
-    creds.refresh(Request())
+    """Load credentials from yt_token.json (written from YT_TOKEN_JSON secret at runtime)."""
+    if not os.path.exists(_TOKEN_FILE):
+        raise FileNotFoundError("yt_token.json not found — set YT_TOKEN_JSON secret")
+    creds = Credentials.from_authorized_user_file(_TOKEN_FILE, _SCOPES)
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        with open(_TOKEN_FILE, 'w') as f:
+            f.write(creds.to_json())
     return build('youtube', 'v3', credentials=creds)
 
 

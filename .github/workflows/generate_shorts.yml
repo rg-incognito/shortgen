@@ -74,6 +74,10 @@ jobs:
           HF_TOKEN:      ${{ secrets.HF_TOKEN }}
           WHISPER_MODEL: ${{ github.event.inputs.whisper_model || 'small' }}
 
+      - name: Write YouTube token
+        if: ${{ secrets.YT_TOKEN_JSON != '' }}
+        run: echo '${{ secrets.YT_TOKEN_JSON }}' > yt_token.json
+
       - name: Generate shorts
         run: python src/main.py
         env:

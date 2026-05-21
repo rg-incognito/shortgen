@@ -1,6 +1,8 @@
-*.json
 __pycache__/
 *.pyc
 .env
 token.txt
 tokens.txt
+yt_token.json
+*_secret.json
+oauth_client.json
