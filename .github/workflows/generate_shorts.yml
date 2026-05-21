@@ -19,10 +19,11 @@ on:
 # Required GitHub Secrets:
 #   GOOGLE_SERVICE_ACCOUNT_JSON  — full JSON of the service account key file
 #   GEMINI_API_KEY               — from aistudio.google.com/app/apikey
-#   GOOGLE_REFRESH_TOKEN         — from setup_oauth.py
+#   GOOGLE_REFRESH_TOKEN         — run setup_oauth.py locally (covers Drive + YouTube)
 #   GOOGLE_CLIENT_ID             — OAuth client ID
 #   GOOGLE_CLIENT_SECRET         — OAuth client secret
 #   HF_TOKEN                     — HuggingFace token (free) for pyannote diarization
+# NOTE: refresh token auto-refreshes — no re-auth needed as long as workflow runs regularly
 
 jobs:
   generate-shorts:

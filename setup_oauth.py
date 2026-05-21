@@ -12,9 +12,15 @@ Then add these three values as GitHub Secrets:
 """
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-SCOPES = ['https://www.googleapis.com/auth/drive']
+SCOPES = [
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/youtube.upload',
+]
 
-flow = InstalledAppFlow.from_client_secrets_file('oauth_client.json', SCOPES)
+flow = InstalledAppFlow.from_client_secrets_file(
+    'client_secret_1061831573768-v5195flb6ql1a38fva5ic0a5b0gm80iq.apps.googleusercontent.com.json',
+    SCOPES,
+)
 creds = flow.run_local_server(port=0)
 
 print("\n--- Copy these into GitHub Secrets ---")

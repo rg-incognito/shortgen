@@ -24,30 +24,52 @@ def list_videos(folder_id, credentials_info):
     return [(f['id'], f['name']) for f in res.get('files', [])]
 
 
-def pick_video(folder_id, credentials_info, tracker):
+def pick_video(folder_id, credentials_info, tracker, max_runs=3):
     """
     Return (file_id, episode_name) for the next video to process.
-    Prefers videos that have had 1 run (need a 2nd) over fresh ones (0 runs).
-    Skips videos already at MAX_RUNS (should have been archived).
+    Prefers videos closest to max_runs (complete partial episodes first).
+    Skips videos already at max_runs (should have been archived).
     """
     videos = list_videos(folder_id, credentials_info)
     if not videos:
         return None, None
 
-    run1, run0 = [], []
+    buckets = {}
     for file_id, name in videos:
         episode = os.path.splitext(name)[0]
         count = tracker.get_run_count(episode)
-        if count == 0:
-            run0.append((file_id, episode))
-        elif count == 1:
-            run1.append((file_id, episode))
+        if count < max_runs:
+            buckets.setdefault(count, []).append((file_id, episode))
 
-    chosen = run1 or run0
-    if not chosen:
-        return None, None
+    for count in sorted(buckets.keys(), reverse=True):
+        if buckets[count]:
+            return buckets[count][0]
+    return None, None
 
-    return chosen[0]
+
+def _get_or_create_folder(name, parent_id, svc):
+    res = svc.files().list(
+        q=(f"'{parent_id}' in parents and name='{name}' "
+           f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
+        fields='files(id)',
+    ).execute()
+    files = res.get('files', [])
+    if files:
+        return files[0]['id']
+    meta = {'name': name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [parent_id]}
+    return svc.files().create(body=meta, fields='id').execute()['id']
+
+
+def move_to_used_folder(file_id, shorts_folder_id):
+    """Move a file from shorts/ into shorts/used/ subfolder."""
+    svc = _svc()
+    used_id = _get_or_create_folder('used', shorts_folder_id, svc)
+    svc.files().update(
+        fileId=file_id,
+        addParents=used_id,
+        removeParents=shorts_folder_id,
+        fields='id, parents',
+    ).execute(num_retries=5)
 
 
 def move_to_archive(file_id, archive_folder_id, videos_folder_id, credentials_info):
@@ -70,7 +92,9 @@ def download_video(file_id, output_path, credentials_info):
 
 
 def upload_shorts(file_paths, folder_id, credentials_info):
+    """Upload files to Drive folder. Returns list of (name, file_id)."""
     svc = _svc()
+    uploaded = []
     for path in file_paths:
         name = os.path.basename(path)
         metadata = {'name': name, 'parents': [folder_id]}
@@ -78,4 +102,7 @@ def upload_shorts(file_paths, folder_id, credentials_info):
         result = svc.files().create(
             body=metadata, media_body=media, fields='id',
         ).execute()
-        print(f"  Uploaded {name} → {result.get('id')}")
+        file_id = result.get('id')
+        print(f"  Uploaded {name} → {file_id}")
+        uploaded.append((name, file_id))
+    return uploaded

@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from drive_client import download_video, upload_shorts, pick_video, move_to_archive
+from drive_client import download_video, upload_shorts, pick_video, move_to_archive, move_to_used_folder
 from transcriber import transcribe_video
 from analyzer import analyze_transcript, generate_yt_metadata
 from clipper import create_story_short
@@ -43,7 +43,7 @@ def main():
     # Auto-pick if no file ID provided
     if not video_file_id:
         print("[0/5] Auto-picking video from videos/ folder...")
-        video_file_id, episode_name = pick_video(VIDEOS_FOLDER_ID, service_account_info, tracker)
+        video_file_id, episode_name = pick_video(VIDEOS_FOLDER_ID, service_account_info, tracker, max_runs=MAX_RUNS)
         if not video_file_id:
             print("No unprocessed videos in videos/ folder. Upload one and re-run.")
             sys.exit(0)
@@ -96,7 +96,35 @@ def main():
                                         all_words=all_words)
 
         print("[5/5] Uploading to Drive...")
-        upload_shorts([short_path], SHORTS_FOLDER_ID, service_account_info)
+        uploaded = upload_shorts([short_path], SHORTS_FOLDER_ID, service_account_info)
+        drive_file_id = uploaded[0][1] if uploaded else None
+
+        # Upload to YouTube as a scheduled post
+        if yt_meta:
+            try:
+                from youtube_client import upload_scheduled
+                publish_at = tracker.get_next_publish_slot()
+                print(f"[5b] Scheduling on YouTube → {publish_at}...")
+                yt_video_id = upload_scheduled(
+                    short_path,
+                    yt_meta['title'],
+                    yt_meta['description'],
+                    yt_meta['tags'],
+                    publish_at,
+                )
+                print(f"      https://youtu.be/{yt_video_id}")
+                tracker.update_yt_url(episode_name, current_run,
+                                      story['storyline_title'], yt_video_id, publish_at)
+            except Exception as e:
+                print(f"      YouTube upload skipped: {e}")
+
+        # Move the uploaded short to shorts/used/
+        if drive_file_id:
+            try:
+                move_to_used_folder(drive_file_id, SHORTS_FOLDER_ID)
+                print("      Moved to shorts/used/")
+            except Exception as e:
+                print(f"      Move to used/ skipped: {e}")
 
         # Log each clip segment individually so future runs avoid them all
         clips_for_log = [
