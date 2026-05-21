@@ -12,7 +12,7 @@ print('  Whisper done.')
 if hf_token:
     print('Pre-downloading pyannote/speaker-diarization-3.1...')
     from pyannote.audio import Pipeline
-    Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=hf_token)
+    Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', token=hf_token)
     print('  Pyannote done.')
 else:
     print('HF_TOKEN not set — skipping pyannote download (face-only tracking will be used).')
