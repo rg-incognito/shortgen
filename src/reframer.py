@@ -17,7 +17,7 @@ _mp_face_mesh = mp.solutions.face_mesh
 
 _OUT_W, _OUT_H = 1080, 1920
 _SAMPLE_FPS   = 3      # face-detection samples per second of source video
-_SMOOTH_ALPHA = 0.06   # EMA smoothing — lower = slower, steadier pan
+_SMOOTH_ALPHA = 0.03   # EMA smoothing — lower = slower, steadier pan
 
 # MediaPipe Face Mesh landmark indices
 _NOSE_TIP  = 1
