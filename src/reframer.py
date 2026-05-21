@@ -188,7 +188,7 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
         '-i', 'pipe:0',
         '-ss', str(start_sec), '-to', str(end_sec), '-i', video_path,
         '-map', '0:v', '-map', '1:a?',
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:v', 'libx264', '-preset', 'slow', '-crf', '18',
         '-c:a', 'aac', '-b:a', '128k',
         '-shortest', output_path,
     ]
