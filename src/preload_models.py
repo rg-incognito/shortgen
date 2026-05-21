@@ -16,7 +16,7 @@ if hf_token:
         if not hasattr(torchaudio, 'set_audio_backend'):
             torchaudio.set_audio_backend = lambda *a, **k: None
         from pyannote.audio import Pipeline
-        Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=hf_token)
+        Pipeline.from_pretrained('pyannote/speaker-diarization-3.1')
         print('  Pyannote done.')
     except Exception as e:
         print(f'  Pyannote download failed: {e}')

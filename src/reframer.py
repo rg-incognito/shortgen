@@ -33,10 +33,7 @@ def load_diarization_pipeline(hf_token: str):
         torchaudio.set_audio_backend = lambda *a, **k: None
     from pyannote.audio import Pipeline
     print('  Loading pyannote diarization model...')
-    pipe = Pipeline.from_pretrained(
-        'pyannote/speaker-diarization-3.1',
-        use_auth_token=hf_token,
-    )
+    pipe = Pipeline.from_pretrained('pyannote/speaker-diarization-3.1')
     return pipe
 
 
