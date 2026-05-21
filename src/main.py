@@ -24,11 +24,20 @@ def main():
     gemini_api_key        = os.environ['GEMINI_API_KEY']
     spreadsheet_id        = os.environ['SPREADSHEET_ID'].strip()
     whisper_model         = os.environ.get('WHISPER_MODEL', 'small')
+    hf_token              = os.environ.get('HF_TOKEN', '').strip()
 
     video_file_id = os.environ.get('VIDEO_FILE_ID', '').strip()
     episode_name  = os.environ.get('EPISODE_NAME', '').strip()
 
     tracker = SheetTracker(service_account_info, spreadsheet_id)
+
+    diarization_pipeline = None
+    if hf_token:
+        try:
+            from reframer import load_diarization_pipeline
+            diarization_pipeline = load_diarization_pipeline(hf_token)
+        except Exception as e:
+            print(f'  Diarization pipeline unavailable: {e} — using face-only tracking')
 
     # Auto-pick if no file ID provided
     if not video_file_id:
@@ -72,7 +81,8 @@ def main():
         shorts_dir = work_dir / 'shorts'
         shorts_dir.mkdir()
         print("[4/5] Creating shorts...")
-        short_paths = create_shorts(str(video_path), clips, str(shorts_dir), episode_name)
+        short_paths = create_shorts(str(video_path), clips, str(shorts_dir), episode_name,
+                                    pipeline=diarization_pipeline)
 
         print(f"[5/5] Uploading {len(short_paths)} shorts to Drive...")
         upload_shorts(short_paths, SHORTS_FOLDER_ID, service_account_info)

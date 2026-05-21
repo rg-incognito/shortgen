@@ -19,12 +19,15 @@ on:
 # Required GitHub Secrets:
 #   GOOGLE_SERVICE_ACCOUNT_JSON  — full JSON of the service account key file
 #   GEMINI_API_KEY               — from aistudio.google.com/app/apikey
-#   SPREADSHEET_ID               — ID from the ShortGen Tracker sheet URL
+#   GOOGLE_REFRESH_TOKEN         — from setup_oauth.py
+#   GOOGLE_CLIENT_ID             — OAuth client ID
+#   GOOGLE_CLIENT_SECRET         — OAuth client secret
+#   HF_TOKEN                     — HuggingFace token (free) for pyannote diarization
 
 jobs:
   generate-shorts:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -47,26 +50,22 @@ jobs:
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: sudo apt-get install -y ffmpeg
 
+      - name: Install PyTorch CPU
+        run: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Cache Whisper model
+      - name: Cache HuggingFace models
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface/hub
-          key: whisper-${{ github.event.inputs.whisper_model || 'small' }}
+          key: hf-whisper-${{ github.event.inputs.whisper_model || 'small' }}-pyannote-3.1
 
-      - name: Pre-download Whisper model
-        run: |
-          python -c "
-          from faster_whisper import WhisperModel
-          import os
-          model = os.environ.get('WHISPER_MODEL', 'small')
-          print(f'Downloading whisper-{model}...')
-          WhisperModel(model, device='cpu', compute_type='int8')
-          print('Done.')
-          "
+      - name: Pre-download models
+        run: python src/preload_models.py
         env:
+          HF_TOKEN:      ${{ secrets.HF_TOKEN }}
           WHISPER_MODEL: ${{ github.event.inputs.whisper_model || 'small' }}
 
       - name: Generate shorts
@@ -77,11 +76,11 @@ jobs:
           GOOGLE_CLIENT_ID:            ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET:        ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
+          HF_TOKEN:                    ${{ secrets.HF_TOKEN }}
           SPREADSHEET_ID:              '1d-GID8JCIrw89ygIKXfsyT9Fe0qtxxmsUaKORuDliOM'
           VIDEO_FILE_ID:               ${{ github.event.inputs.video_file_id }}
           EPISODE_NAME:                ${{ github.event.inputs.episode_name }}
           WHISPER_MODEL:               ${{ github.event.inputs.whisper_model }}
-          # Folder IDs — hardcoded, change here if you restructure Drive
           VIDEOS_FOLDER_ID:  '1bIFaNpfBy1Bp9R14T22EV-hMsYYrLeTS'
           SHORTS_FOLDER_ID:  '1kzFXWZQu8QQVtZKeAVvSgHcLaRFfK6tg'
           ARCHIVE_FOLDER_ID: '1nHZCaWO_KvkV52TekkF8ecC5JtIlXqJj'
