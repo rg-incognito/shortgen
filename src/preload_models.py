@@ -12,11 +12,6 @@ print('  Whisper done.')
 if hf_token:
     print('Pre-downloading pyannote/speaker-diarization-3.1...')
     try:
-        import torchaudio
-        if not hasattr(torchaudio, 'set_audio_backend'):
-            torchaudio.set_audio_backend = lambda *a, **k: None
-        if not hasattr(torchaudio, 'get_audio_backend'):
-            torchaudio.get_audio_backend = lambda: 'soundfile'
         from pyannote.audio import Pipeline
         Pipeline.from_pretrained('pyannote/speaker-diarization-3.1')
         print('  Pyannote done.')

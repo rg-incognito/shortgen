@@ -49,19 +49,16 @@ jobs:
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: sudo apt-get install -y ffmpeg
 
-      - name: Install uv
-        run: pip install uv
-
       - name: Cache pip packages
         uses: actions/cache@v4
         with:
-          path: ~/.cache/uv
-          key: uv-${{ hashFiles('requirements.txt') }}
+          path: ~/.cache/pip
+          key: pip-torch202-${{ hashFiles('requirements.txt') }}
 
       - name: Install Python dependencies
         run: |
-          uv pip install --system torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-          uv pip install --system -r requirements.txt
+          pip install torch==2.0.2+cpu torchaudio==2.0.2+cpu --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
 
       - name: Cache HuggingFace models
         uses: actions/cache@v4
