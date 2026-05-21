@@ -3,7 +3,7 @@ import re
 import time
 import requests
 
-_GEMINI_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent'
+_GEMINI_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent'
 
 _PROMPT = """You are a video editor who creates viral short-form content from the TV show Friends (US sitcom, 1994-2004).
 
