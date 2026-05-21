@@ -1,7 +1,7 @@
 import os
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
-from google.oauth2 import service_account
+from google.oauth2 import service_account, credentials as oauth2_credentials
 
 _SCOPES = ['https://www.googleapis.com/auth/drive']
 
@@ -9,6 +9,17 @@ _SCOPES = ['https://www.googleapis.com/auth/drive']
 def _service(credentials_info):
     creds = service_account.Credentials.from_service_account_info(
         credentials_info, scopes=_SCOPES
+    )
+    return build('drive', 'v3', credentials=creds)
+
+
+def _oauth_service():
+    creds = oauth2_credentials.Credentials(
+        token=None,
+        refresh_token=os.environ['GOOGLE_REFRESH_TOKEN'],
+        token_uri='https://oauth2.googleapis.com/token',
+        client_id=os.environ['GOOGLE_CLIENT_ID'],
+        client_secret=os.environ['GOOGLE_CLIENT_SECRET'],
     )
     return build('drive', 'v3', credentials=creds)
 
@@ -74,13 +85,12 @@ def download_video(file_id, output_path, credentials_info):
 
 
 def upload_shorts(file_paths, folder_id, credentials_info):
-    svc = _service(credentials_info)
+    svc = _oauth_service()
     for path in file_paths:
         name = os.path.basename(path)
         metadata = {'name': name, 'parents': [folder_id]}
         media = MediaFileUpload(path, mimetype='video/mp4', resumable=True)
         result = svc.files().create(
             body=metadata, media_body=media, fields='id',
-            supportsAllDrives=True,
         ).execute()
         print(f"  Uploaded {name} → {result.get('id')}")
