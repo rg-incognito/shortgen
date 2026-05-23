@@ -32,6 +32,7 @@ Return ONLY a valid JSON object — no markdown, no explanation:
 {{
   "storyline_title": "phoebe_bites_massage_client",
   "storyline_summary": "Phoebe bites her client, panics, the gang reacts, she confesses",
+  "series_tag": "phoebe_being_phoebe",
   "clips": [
     {{
       "start_seconds": 87.0,
@@ -55,28 +56,40 @@ Rules:
 - CRITICAL: Every clip must end at a natural sentence or speech pause — NEVER cut mid-word or mid-sentence. Extend end_seconds by 1-2s if needed to catch the full line.
 - Pick moments with a clear spoken punchline or strong visual reaction
 - Score 1-10 for viral potential as a compiled reel (10 = highest)
-- storyline_title: snake_case, max 40 chars"""
+- storyline_title: snake_case, max 40 chars
+- series_tag: pick exactly one — ross_being_ross | joey_being_joey | chandler_being_chandler | phoebe_being_phoebe | monica_being_monica | rachel_being_rachel | relationship_drama | gang_together"""
 
 
 _YT_PROMPT = """You are a YouTube content strategist for a Friends (US sitcom, 1994-2004) clips channel called "The One Where".
 
 Generate YouTube metadata for a short-form vertical reel (under 60 seconds).
 
-Episode : {episode_str}
+Episode  : {episode_str}
 Storyline: {storyline}
 Summary  : {summary}
+Series   : {series_tag}
 Score    : {score}/10
+
+The series_tag maps to these display names for the title:
+ross_being_ross → "Ross Being Ross"
+joey_being_joey → "Joey Being Joey"
+chandler_being_chandler → "Chandler Being Chandler"
+phoebe_being_phoebe → "Phoebe Being Phoebe"
+monica_being_monica → "Monica Being Monica"
+rachel_being_rachel → "Rachel Being Rachel"
+relationship_drama → "Relationship Drama"
+gang_together → "The Gang"
 
 Return ONLY valid JSON, no markdown:
 {{
-  "title": "Phoebe bites her massage client 😭 | Friends S4E4",
+  "title": "Phoebe Being Phoebe 😭 | Friends S4E4",
   "description": "Phoebe actually bites someone during a massage — and the gang's reaction is everything.\\n\\nFriends Season 4, Episode 4 | \\"The One with the Ballroom Dancing\\"\\n\\n📌 Subscribe for daily Friends story reels — the funniest moments cut down to under a minute.\\n\\n#Friends #Phoebe #FriendsTV #PhoebeBuffay #FriendsClips #TVShows #Sitcom #FunnyMoments #90sTV #FriendsReels",
   "tags": "Friends, Friends TV show, Phoebe Buffay, Friends clips, Friends funny moments, Friends Season 4, sitcom, 90s TV, Lisa Kudrow, Friends compilation, massage, Friends shorts, comedy, NBC, Friends rewatch",
   "pinned_comment": "Phoebe really said bite first, apologise never 😭 Team Phoebe or Team Client? 👇"
 }}
 
 Rules:
-- title: max 70 chars, punchy hook, episode code (e.g. S4E4), exactly 1 emoji
+- title: format MUST be "[Series Display Name] 😭 | Friends SxEx" — use the display name from the series_tag mapping above, max 70 chars, exactly 1 emoji, episode code at end
 - description: 2-line punchy hook → blank line → episode info line → blank line → subscribe CTA line → blank line → exactly 10 hashtags on one line
 - tags: exactly 15 tags, comma-separated, mix of broad (Friends) and specific (character, theme)
 - pinned_comment: must be ONE of these formats — (a) polarizing take specific to this clip: "Team X or Team Y? 👇", (b) ranking prompt: "Rate this [character] moment 1-10 👇", (c) completion gap: "What did [character] say next? 👇". NEVER use generic questions like "which character causes the most chaos". Must reference the specific characters or situation from THIS clip."""
@@ -92,6 +105,7 @@ def generate_yt_metadata(story, episode_name, api_key, retries=3):
         episode_str=ep_str,
         storyline=story['storyline_title'].replace('_', ' '),
         summary=story['storyline_summary'],
+        series_tag=story.get('series_tag', 'gang_together'),
         score=story['score'],
     )
     payload = {
