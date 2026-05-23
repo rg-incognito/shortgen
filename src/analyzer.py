@@ -72,14 +72,14 @@ Return ONLY valid JSON, no markdown:
   "title": "Phoebe bites her massage client 😭 | Friends S4E4",
   "description": "Phoebe actually bites someone during a massage — and the gang's reaction is everything.\\n\\nFriends Season 4, Episode 4 | \\"The One with the Ballroom Dancing\\"\\n\\n📌 Subscribe for daily Friends story reels — the funniest moments cut down to under a minute.\\n\\n#Friends #Phoebe #FriendsTV #PhoebeBuffay #FriendsClips #TVShows #Sitcom #FunnyMoments #90sTV #FriendsReels",
   "tags": "Friends, Friends TV show, Phoebe Buffay, Friends clips, Friends funny moments, Friends Season 4, sitcom, 90s TV, Lisa Kudrow, Friends compilation, massage, Friends shorts, comedy, NBC, Friends rewatch",
-  "pinned_comment": "Phoebe really said bite first, apologise never 😭 Which Friends character causes the most chaos? 👇"
+  "pinned_comment": "Phoebe really said bite first, apologise never 😭 Team Phoebe or Team Client? 👇"
 }}
 
 Rules:
 - title: max 70 chars, punchy hook, episode code (e.g. S4E4), exactly 1 emoji
 - description: 2-line punchy hook → blank line → episode info line → blank line → subscribe CTA line → blank line → exactly 10 hashtags on one line
 - tags: exactly 15 tags, comma-separated, mix of broad (Friends) and specific (character, theme)
-- pinned_comment: funny/relatable observation + engagement question + 1 emoji + 👇"""
+- pinned_comment: must be ONE of these formats — (a) polarizing take specific to this clip: "Team X or Team Y? 👇", (b) ranking prompt: "Rate this [character] moment 1-10 👇", (c) completion gap: "What did [character] say next? 👇". NEVER use generic questions like "which character causes the most chaos". Must reference the specific characters or situation from THIS clip."""
 
 
 def generate_yt_metadata(story, episode_name, api_key, retries=3):
