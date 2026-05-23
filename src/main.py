@@ -99,10 +99,22 @@ def main():
         uploaded = upload_shorts([short_path], SHORTS_FOLDER_ID, service_account_info)
         drive_file_id = uploaded[0][1] if uploaded else None
 
+        _SERIES_PLAYLIST = {
+            'ross_being_ross':         'Ross Being Ross',
+            'joey_being_joey':         'Joey Being Joey',
+            'chandler_being_chandler': 'Chandler Being Chandler',
+            'phoebe_being_phoebe':     'Phoebe Being Phoebe',
+            'monica_being_monica':     'Monica Being Monica',
+            'rachel_being_rachel':     'Rachel Being Rachel',
+            'relationship_drama':      'Relationship Drama',
+            'gang_together':           'The Gang',
+        }
+
         # Upload to YouTube as a scheduled post (requires YT_TOKEN_JSON secret)
+        yt_video_id = None
         if yt_meta:
             try:
-                from youtube_client import upload_scheduled
+                from youtube_client import upload_scheduled, add_to_playlist
                 publish_at = tracker.get_next_publish_slot()
                 print(f"[5b] Scheduling on YouTube → {publish_at}...")
                 yt_video_id = upload_scheduled(
@@ -115,6 +127,15 @@ def main():
                 print(f"      https://youtu.be/{yt_video_id}")
                 tracker.update_yt_url(episode_name, current_run,
                                       story['storyline_title'], yt_video_id, publish_at)
+
+                series_tag = story.get('series_tag', '')
+                playlist_title = _SERIES_PLAYLIST.get(series_tag)
+                if playlist_title:
+                    try:
+                        add_to_playlist(yt_video_id, playlist_title)
+                        print(f"      Added to playlist: {playlist_title}")
+                    except Exception as pe:
+                        print(f"      Playlist add skipped: {pe}")
             except Exception as e:
                 print(f"      YouTube upload skipped: {e}")
 
