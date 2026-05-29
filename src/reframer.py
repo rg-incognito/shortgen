@@ -143,8 +143,8 @@ def _smooth(values, alpha):
 def reframe_clip(video_path: str, start_sec: float, end_sec: float,
                  output_path: str, pipeline=None) -> None:
     """
-    Produce a 1080x1920 vertical clip with speaker-focused dynamic crop.
-    Falls back to largest-face tracking when pipeline is None.
+    Produce a 1080x1920 vertical clip: black letterbox top/bottom, face-tracked
+    crop filling 70% of output height at full output width.
     """
     cap = cv2.VideoCapture(video_path)
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
@@ -154,7 +154,16 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
 
     start_f      = int(start_sec * src_fps)
     total_frames = int((end_sec - start_sec) * src_fps)
-    crop_w       = min(int(src_h * 9 / 16), src_w)
+    crop_w       = min(int(src_h * 9 / 16), src_w)  # used for face detection
+
+    # Foreground: face-tracked crop fills 70% of output height at full output width.
+    # Derive crop width from desired display height to avoid side bands or distortion.
+    fg_disp_h   = int(_OUT_H * 0.70)
+    crop_w_disp = min(int(_OUT_W * src_h / fg_disp_h), src_w)
+    if crop_w_disp == src_w:          # very wide source — clamp and recalc height
+        fg_disp_h = int(_OUT_W * src_h / src_w)
+    fg_y     = (_OUT_H - fg_disp_h) // 2
+    black_bg = np.zeros((_OUT_H, _OUT_W, 3), dtype=np.uint8)
 
     # --- Speaker diarization (optional) ---
     speech_frames: set = set()
@@ -176,7 +185,7 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
     # --- Crop trajectory ---
     crop_cx = _build_cx_timeline(frame_data, speech_frames, total_frames, src_w)
     crop_cx = _smooth(crop_cx, _SMOOTH_ALPHA)
-    half    = crop_w / 2
+    half    = crop_w_disp / 2
     crop_cx = [max(half, min(src_w - half, cx)) for cx in crop_cx]
 
     # --- Render: pipe raw BGR frames → ffmpeg → libx264 ---
@@ -203,17 +212,14 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
             break
 
         cx = int(crop_cx[fi])
-        x1 = max(0, min(cx - crop_w // 2, src_w - crop_w))
+        x1 = max(0, min(cx - crop_w_disp // 2, src_w - crop_w_disp))
 
-        # Blurred full frame as background (stretched to 9:16)
-        bg = cv2.GaussianBlur(frame, (45, 45), 0)
-        bg = cv2.resize(bg, (_OUT_W, _OUT_H), interpolation=cv2.INTER_LINEAR)
-
-        # Sharp speaker crop as foreground (fills output)
-        fg = cv2.resize(frame[:, x1:x1 + crop_w], (_OUT_W, _OUT_H),
-                        interpolation=cv2.INTER_LANCZOS4)
-
-        proc.stdin.write(fg.tobytes())
+        # Black canvas with face-tracked crop centered vertically
+        fg     = cv2.resize(frame[:, x1:x1 + crop_w_disp], (_OUT_W, fg_disp_h),
+                            interpolation=cv2.INTER_LANCZOS4)
+        canvas = black_bg.copy()
+        canvas[fg_y:fg_y + fg_disp_h, :] = fg
+        proc.stdin.write(canvas.tobytes())
 
     cap.release()
     try:
