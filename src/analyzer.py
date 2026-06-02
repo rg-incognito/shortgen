@@ -11,22 +11,31 @@ Your task: Create a ~30-second reel that tells ONE complete storyline in tight, 
 
 OUTPUT STRUCTURE (strictly in this order):
 1. HOOK (first clip, 3-5 sec) — the single most shocking/funny/relatable moment from the ENTIRE storyline. Does NOT need to be the chronological start. CRITICAL: the very first frame must start MID-ACTION — the character must already be mid-sentence, mid-reaction, or mid-punchline. NEVER open on someone walking in, sitting down, looking around, or any establishing shot. Start on the embarrassed face already in frame, the punchline already being delivered, the shocked reaction already happening.
-2. CONTEXT clips (2-4 clips, 3-6 sec each) — the minimum lines needed to understand why the hook moment is funny. Only the single KEY line or reaction per beat. Cut everything else.
-3. PAYOFF (last clip, 3-5 sec) — the final punchline, resolution, or biggest laugh.
+2. CONTEXT clips (2-4 clips, 3-6 sec each) — the minimum lines needed to understand why the hook moment is funny or emotionally powerful. Only the single KEY line or reaction per beat. Cut everything else.
+3. PAYOFF (last clip, 3-5 sec) — the final punchline, resolution, emotional reveal, or biggest laugh.
 
 TOTAL target: 25-35 seconds across all clips combined.
 
-Great storylines to look for:
-1. A character does something embarrassing/dumb that escalates (Ross, Joey, Chandler)
-2. Phoebe's bizarre behaviour with an absurd payoff
-3. A lie or scheme that unravels with great reaction shots
-4. A misunderstanding that snowballs
-5. Physical comedy with a clear punchline
+Great storylines to look for — RANKED BY VIRAL POTENTIAL:
+TIER 1 (highest views — pick these first):
+1. A romantic revelation or confession — Ross telling Rachel he loves her, Chandler proposing to Monica, any "I've always loved you" moment
+2. A plot twist or secret exposed — someone finds out something that changes everything, a lie finally unravels in front of everyone
+3. An emotional moment that also lands funny — a character being vulnerable then immediately undercut by a joke
+4. A relationship turning point — first kiss, breakup, getting back together, a jealousy moment with a great reaction shot
+
+TIER 2 (solid performers):
+5. A character does something embarrassing/dumb that escalates (Ross, Joey, Chandler)
+6. Phoebe's bizarre behaviour with an absurd payoff
+7. A lie or scheme that unravels with great reaction shots
+8. A misunderstanding that snowballs
+9. Physical comedy with a clear punchline
+
+Previously used storylines from this episode (AVOID repeating these themes): {used_storylines}
 
 Transcript (format: [start_sec - end_sec] text):
 {transcript}
 
-Previously used segments (AVOID these): {used_segments}
+Previously used segments (AVOID these timestamps): {used_segments}
 
 Return ONLY a valid JSON object — no markdown, no explanation:
 {{
@@ -70,29 +79,21 @@ Summary  : {summary}
 Series   : {series_tag}
 Score    : {score}/10
 
-The series_tag maps to these display names for the title:
-ross_being_ross → "Ross Being Ross"
-joey_being_joey → "Joey Being Joey"
-chandler_being_chandler → "Chandler Being Chandler"
-phoebe_being_phoebe → "Phoebe Being Phoebe"
-monica_being_monica → "Monica Being Monica"
-rachel_being_rachel → "Rachel Being Rachel"
-relationship_drama → "Relationship Drama"
-gang_together → "The Gang"
-
 Return ONLY valid JSON, no markdown:
 {{
-  "title": "Phoebe Being Phoebe 😭 | Friends S4E4",
-  "description": "Phoebe actually bites someone during a massage — and the gang's reaction is everything.\\n\\nFriends Season 4, Episode 4 | \\"The One with the Ballroom Dancing\\"\\n\\n📌 Subscribe for daily Friends story reels — the funniest moments cut down to under a minute.\\n\\n#Friends #Phoebe #FriendsTV #PhoebeBuffay #FriendsClips #TVShows #Sitcom #FunnyMoments #90sTV #FriendsReels",
-  "tags": "Friends, Friends TV show, Phoebe Buffay, Friends clips, Friends funny moments, Friends Season 4, sitcom, 90s TV, Lisa Kudrow, Friends compilation, massage, Friends shorts, comedy, NBC, Friends rewatch",
+  "title": "Phoebe actually bit her massage client and somehow blamed the universe for it",
+  "description": "Phoebe actually bites someone during a massage — and the gang's reaction is everything.\\n\\nFriends | The One with the Ballroom Dancing\\n\\n📌 Subscribe for daily Friends moments — the best scenes cut down to under a minute.\\n\\n#Friends #FriendsTV #PhoebeBuffay #FriendsClips #Sitcom #FunnyMoments #90sTV #PhoebeBeingPhoebe #FriendsShorts #NBC",
+  "tags": "Friends, Friends TV show, Phoebe Buffay, Friends clips, Friends funny moments, Friends compilation, sitcom, 90s TV, Lisa Kudrow, Friends shorts, comedy, NBC, Friends rewatch, Phoebe massage, Friends moments",
   "pinned_comment": "Phoebe really said bite first, apologise never 😭 Team Phoebe or Team Client? 👇"
 }}
 
 Rules:
-- title: format MUST be "[Series Display Name] 😭 | Friends SxEx" — use the display name from the series_tag mapping above, max 70 chars, exactly 1 emoji, episode code at end
-- description: 2-line punchy hook → blank line → episode info line → blank line → subscribe CTA line → blank line → exactly 10 hashtags on one line
-- tags: exactly 15 tags, comma-separated, mix of broad (Friends) and specific (character, theme)
-- pinned_comment: must be ONE of these formats — (a) polarizing take specific to this clip: "Team X or Team Y? 👇", (b) ranking prompt: "Rate this [character] moment 1-10 👇", (c) completion gap: "What did [character] say next? 👇". NEVER use generic questions like "which character causes the most chaos". Must reference the specific characters or situation from THIS clip."""
+- title: Write a narrative sentence (max 90 chars) describing WHAT ACTUALLY HAPPENS in the clip — like a teaser that makes fans instantly curious or laugh. Think of it as a spoiler-style hook. NO episode code. NO character brand prefix like "Joey Being Joey". NO emoji in the middle. Write it like a sentence: "Ross accidentally told everyone about Chandler's secret job" or "Rachel found out Ross put her name on the divorce papers wrong". One optional emoji at the very end only if it fits naturally.
+- The best titles reference a SPECIFIC surprising/funny/emotional thing that happens — not a vague character description
+- description: 2-line punchy hook → blank line → show + episode name line (no season/episode code) → blank line → subscribe CTA → blank line → exactly 10 hashtags on one line
+- tags: exactly 15 tags, comma-separated, mix of broad (Friends) and specific (character, theme, relationship)
+- For relationship_drama series_tag, add ship hashtags to description: #RossAndRachel or #ChandlerAndMonica depending on who's involved
+- pinned_comment: must be ONE of these formats — (a) polarizing take specific to this clip: "Team X or Team Y? 👇", (b) ranking prompt: "Rate this [character] moment 1-10 👇", (c) completion gap: "What did [character] say next? 👇". NEVER generic. Must reference the specific characters or situation from THIS clip."""
 
 
 def generate_yt_metadata(story, episode_name, api_key, retries=3):
@@ -132,7 +133,7 @@ def generate_yt_metadata(story, episode_name, api_key, retries=3):
     return None
 
 
-def analyze_transcript(segments, api_key, used_segments=None, retries=5):
+def analyze_transcript(segments, api_key, used_segments=None, used_storylines=None, retries=5):
     api_key = api_key.strip()
 
     transcript_text = '\n'.join(
@@ -143,7 +144,14 @@ def analyze_transcript(segments, api_key, used_segments=None, retries=5):
         ', '.join(f"{s:.0f}s-{e:.0f}s" for s, e in used_segments)
         if used_segments else 'none'
     )
-    prompt = _PROMPT.format(transcript=transcript_text, used_segments=used_str)
+    storylines_str = (
+        '; '.join(used_storylines) if used_storylines else 'none'
+    )
+    prompt = _PROMPT.format(
+        transcript=transcript_text,
+        used_segments=used_str,
+        used_storylines=storylines_str,
+    )
 
     payload = {
         'contents': [{'parts': [{'text': prompt}]}],
