@@ -13,6 +13,13 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+# ASS style constants for the 0.5s hook
+_HOOK_FONT_SIZE = 72
+_HOOK_Y_POS     = 960 # Vertical center for 1920px height
+_HOOK_COLOR     = "&H00FFFFFF&" # White
+_HOOK_OUTLINE   = "&H00000000&" # Black
+_HOOK_SHADOW    = "&H80000000&" # Shadow
+
 
 # ASS style constants
 _FONT      = "Arial"
@@ -62,7 +69,7 @@ def _format_ass_time(seconds):
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def _build_ass(mapped_words, total_duration):
+def _build_ass(mapped_words, total_duration, yt_title=None):
     """Generate ASS subtitle content with 4-word block highlighting."""
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -74,14 +81,21 @@ WrapStyle: 0
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{_FONT},{_FONT_SIZE},{_WHITE},&H000000FF&,{_OUTLINE},{_SHADOW},-1,0,0,0,100,100,0,0,1,3,1,8,30,30,{_Y_POS},1
 Style: Active,{_FONT},{_FONT_SIZE},{_YELLOW},&H000000FF&,{_OUTLINE},{_SHADOW},-1,0,0,0,100,100,0,0,1,3,1,8,30,30,{_Y_POS},1
+Style: Hook,{_FONT},{_HOOK_FONT_SIZE},{_HOOK_COLOR},&H000000FF&,{_HOOK_OUTLINE},{_HOOK_SHADOW},-1,0,0,0,100,100,0,0,1,3,1,2,30,30,{_HOOK_Y_POS},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    if not mapped_words:
-        return header
-
     events = []
+
+    if yt_title:
+        hook_start_str = _format_ass_time(0.0)
+        hook_end_str   = _format_ass_time(0.5) # 0.5 seconds
+        # Use alignment 5 for middle-center (overrides style's default 2 for middle-center)
+        events.append(f"Dialogue: 0,{hook_start_str},{hook_end_str},Hook,,0,0,0,,{{\an5}}{yt_title}")
+
+    if not mapped_words and not yt_title:
+        return header
     BLOCK       = 4
     MAX_WORD_S  = 0.9   # max seconds any single word stays highlighted
     CAPTION_LEAD = 0.15  # captions appear this many seconds before the word is spoken
@@ -126,7 +140,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(events) + "\n"
 
 
-def burn_captions(video_path, output_path, all_words, story_clips):
+def burn_captions(video_path, output_path, all_words, story_clips, yt_title=None):
     mapped = _remap_words(all_words, story_clips)
     if not mapped:
         print("  Captions: no words mapped — copying without captions")
@@ -143,7 +157,7 @@ def burn_captions(video_path, output_path, all_words, story_clips):
     )
     total_duration = float(probe.stdout.strip()) if probe.stdout.strip() else 60.0
 
-    ass_content = _build_ass(mapped, total_duration)
+    ass_content = _build_ass(mapped, total_duration, yt_title)
     ass_file = tempfile.mktemp(suffix='.ass')
     try:
         with open(ass_file, 'w', encoding='utf-8') as f:
