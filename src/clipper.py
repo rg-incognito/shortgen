@@ -4,7 +4,7 @@ import tempfile
 
 
 def create_story_short(video_path, story, output_dir, episode_name,
-                        pipeline=None, all_words=None):
+                        pipeline=None, all_words=None, yt_title=None):
     """
     Cuts every clip in a story arc, reframes each to 9:16, concatenates into
     one compiled video, then burns viral-style captions if word timestamps
@@ -37,7 +37,7 @@ def create_story_short(video_path, story, output_dir, episode_name,
         out_path = os.path.join(output_dir, f"{episode_name}_{title}_s{score}.mp4")
         if all_words:
             print("  Burning captions...")
-            burn_captions(merged_path, out_path, all_words, clips)
+            burn_captions(merged_path, out_path, all_words, clips, yt_title=yt_title)
             os.unlink(merged_path)
         else:
             os.rename(merged_path, out_path)
