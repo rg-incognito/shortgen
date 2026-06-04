@@ -81,15 +81,15 @@ Score    : {score}/10
 
 Return ONLY valid JSON, no markdown:
 {{
-  "title": "Phoebe actually bit her massage client and somehow blamed the universe for it",
+  "title": "Nobody saw this coming from Phoebe",
   "description": "Phoebe actually bites someone during a massage — and the gang's reaction is everything.\\n\\nFriends | The One with the Ballroom Dancing\\n\\n📌 Subscribe for daily Friends moments — the best scenes cut down to under a minute.\\n\\n#Friends #FriendsTV #PhoebeBuffay #FriendsClips #Sitcom #FunnyMoments #90sTV #PhoebeBeingPhoebe #FriendsShorts #NBC",
   "tags": "Friends, Friends TV show, Phoebe Buffay, Friends clips, Friends funny moments, Friends compilation, sitcom, 90s TV, Lisa Kudrow, Friends shorts, comedy, NBC, Friends rewatch, Phoebe massage, Friends moments",
   "pinned_comment": "Phoebe really said bite first, apologise never 😭 Team Phoebe or Team Client? 👇"
 }}
 
 Rules:
-- title: Write a narrative sentence (max 90 chars) describing WHAT ACTUALLY HAPPENS in the clip — like a teaser that makes fans instantly curious or laugh. Think of it as a spoiler-style hook. NO episode code. NO character brand prefix like "Joey Being Joey". NO emoji in the middle. Write it like a sentence: "Ross accidentally told everyone about Chandler's secret job" or "Rachel found out Ross put her name on the divorce papers wrong". One optional emoji at the very end only if it fits naturally.
-- The best titles reference a SPECIFIC surprising/funny/emotional thing that happens — not a vague character description
+- title: Write a concise, curiosity-driven tease (max 80 chars) that hints at the clip's most impactful moment WITHOUT revealing what happens. Open a curiosity gap — the viewer MUST watch to find out. NEVER write a narrative sentence that describes the outcome or spoils the punchline. NO episode code. NO character brand prefix. NO emoji in the middle. Frame it as tension or surprise: "The moment [character] crossed a line", "Nobody expected [character] to do this", "Wait… did [character] really just say that?" — tease the feeling, not the resolution. One optional emoji at the very end only if it fits naturally.
+- The best titles make viewers NEED to click — they hint at a shocking or funny situation without giving away what happens
 - description: 2-line punchy hook → blank line → show + episode name line (no season/episode code) → blank line → subscribe CTA → blank line → exactly 10 hashtags on one line
 - tags: exactly 15 tags, comma-separated, mix of broad (Friends) and specific (character, theme, relationship)
 - For relationship_drama series_tag, add ship hashtags to description: #RossAndRachel or #ChandlerAndMonica depending on who's involved
