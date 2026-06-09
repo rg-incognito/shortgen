@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 
 # ── Import src modules (same as GitHub pipeline) ──────────────────────────────
 from transcriber import transcribe_video
-from analyzer import analyze_transcript
+from analyzer import analyze_transcript, generate_yt_metadata
 import clipper as _clipper_mod
 from clipper import create_story_short
 
@@ -296,6 +296,7 @@ def main():
     episode_name     = video_path.stem.replace(' ', '_')
     transcript_cache = CACHE_DIR / f'{episode_name}_transcript.json'
     story_cache      = CACHE_DIR / f'{episode_name}_story.json'
+    meta_cache       = CACHE_DIR / f'{episode_name}_yt_meta.json'
 
     # --- Gemini key (only needed if story cache is missing) ---
     gemini_api_key = os.environ.get('GEMINI_API_KEY', '').strip()
@@ -344,6 +345,21 @@ def main():
         print(f'      [{story["score"]}/10] {story["storyline_title"]}  (~{total_sec:.0f}s)')
         print(f'      {story["storyline_summary"]}')
         print(f'      Series: {story.get("series_tag", "—")}')
+
+        # --- YT metadata (cached) ---
+        yt_meta = None
+        if meta_cache.exists():
+            print(f'      YT metadata loaded from cache')
+            yt_meta = json.loads(meta_cache.read_text())
+        elif gemini_api_key:
+            print(f'      Generating YouTube metadata...')
+            yt_meta = generate_yt_metadata(story, episode_name, gemini_api_key)
+            if yt_meta:
+                meta_cache.write_text(json.dumps(yt_meta))
+        if yt_meta:
+            print(f'      YT title   : {yt_meta.get("title", "")}')
+            print(f'      Hook text  : {yt_meta.get("hook_text", "")}')
+
         print(f'      {len(story["clips"])} clips:')
         bad_clips = []
         for c in story['clips']:
@@ -379,6 +395,7 @@ def main():
         short_path = create_story_short(
             str(work_video), story, str(shorts_dir),
             episode_name, pipeline=None, all_words=all_words,
+            yt_title=(yt_meta.get('hook_text') or yt_meta.get('title')) if yt_meta else None,
         )
 
         out_file = OUTPUT_DIR / Path(short_path).name

@@ -106,7 +106,8 @@ def main():
         print("[4/5] Creating story compilation...")
         short_path = create_story_short(str(video_path), story, str(shorts_dir),
                                         episode_name, pipeline=diarization_pipeline,
-                                        all_words=all_words, yt_title=yt_meta.get('title') if yt_meta else None)
+                                        all_words=all_words,
+                                        yt_title=(yt_meta.get('hook_text') or yt_meta.get('title')) if yt_meta else None)
 
         print("[5/5] Uploading to Drive...")
         uploaded = upload_shorts([short_path], SHORTS_FOLDER_ID, service_account_info)

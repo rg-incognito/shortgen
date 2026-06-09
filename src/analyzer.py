@@ -105,6 +105,7 @@ Score    : {score}/10
 Return ONLY valid JSON, no markdown:
 {{
   "title": "Nobody saw this coming from Phoebe",
+  "hook_text": "She bit her client and ran.",
   "description": "Phoebe actually bites someone during a massage — and the gang's reaction is everything.\\n\\nFriends | The One with the Ballroom Dancing\\n\\n📌 Subscribe for daily Friends moments — the best scenes cut down to under a minute.\\n\\n#Friends #FriendsTV #PhoebeBuffay #FriendsClips #Sitcom #FunnyMoments #90sTV #PhoebeBeingPhoebe #FriendsShorts #NBC",
   "tags": "Friends, Friends TV show, Phoebe Buffay, Friends clips, Friends funny moments, Friends compilation, sitcom, 90s TV, Lisa Kudrow, Friends shorts, comedy, NBC, Friends rewatch, Phoebe massage, Friends moments",
   "pinned_comment": "Phoebe really said bite first, apologise never 😭 Team Phoebe or Team Client? 👇"
@@ -112,6 +113,7 @@ Return ONLY valid JSON, no markdown:
 
 Rules:
 - title: Write a concise, curiosity-driven tease (max 80 chars) that hints at the clip's most impactful moment WITHOUT revealing what happens. Open a curiosity gap — the viewer MUST watch to find out. NEVER write a narrative sentence that describes the outcome or spoils the punchline. NO episode code. NO character brand prefix. NO emoji in the middle. Frame it as tension or surprise: "The moment [character] crossed a line", "Nobody expected [character] to do this", "Wait… did [character] really just say that?" — tease the feeling, not the resolution. One optional emoji at the very end only if it fits naturally.
+- hook_text: 5-9 word statement shown as a text overlay in the FIRST 0.5 SECONDS of the video before any dialogue is heard. Must create an information gap that makes the viewer need to keep watching. Write in third person, past or present tense. NO emoji. NO spoilers — reveal the situation or stakes, not the outcome. Strong examples: "She's been married this whole time." / "He kissed every man in the room." / "They bet the apartment and lost." / "Nobody expected him to say this." / "She found out everything." Weak examples (avoid): "Phoebe reacts to news" (too vague) / "The gang laughs at Joey" (describes the clip).
 - The best titles make viewers NEED to click — they hint at a shocking or funny situation without giving away what happens
 - description: 2-line punchy hook → blank line → show + episode name line (no season/episode code) → blank line → subscribe CTA → blank line → exactly 10 hashtags on one line
 - tags: exactly 15 tags, comma-separated, mix of broad (Friends) and specific (character, theme, relationship)
