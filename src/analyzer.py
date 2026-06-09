@@ -37,7 +37,7 @@ OUTPUT STRUCTURE (strictly in this order):
 2. CONTEXT clips (2-4 clips, 3-6 sec each) — the minimum lines needed to understand why the hook moment is funny or emotionally powerful. Only the single KEY line or reaction per beat. Cut everything else.
 3. PAYOFF (last clip, 3-5 sec) — the final punchline, resolution, emotional reveal, or biggest laugh.
 
-TOTAL target: 25-35 seconds across all clips combined.
+TOTAL target: 25-30 seconds across all clips combined.
 
 Great storylines to look for — RANKED BY VIRAL POTENTIAL:
 TIER 1 (highest views — pick these first):
@@ -82,7 +82,7 @@ Rules:
 - LAST clip = payoff/punchline/resolution
 - Hook clip: 3-5 seconds only
 - Context clips: 3-6 seconds each — just the KEY line or reaction, nothing more
-- Total combined duration: 25-35 seconds
+- Total combined duration: 25-30 seconds
 - Clips (except the hook) should be in rough CHRONOLOGICAL ORDER
 - Clips must NOT overlap each other or the previously-used segments
 - CRITICAL: Every clip must end at a natural sentence or speech pause — NEVER cut mid-word or mid-sentence. Extend end_seconds by 1-2s if needed to catch the full line.
