@@ -1,8 +1,13 @@
-"""Pre-downloads Whisper + pyannote models into HF cache before main.py runs."""
+"""Pre-downloads Whisper + pyannote + mediapipe models before main.py runs."""
 import os
 
 whisper_model = os.environ.get('WHISPER_MODEL', 'small')
 hf_token      = os.environ.get('HF_TOKEN', '').strip()
+
+print('Pre-downloading face_landmarker model...')
+from reframer import _ensure_landmarker_model
+_ensure_landmarker_model()
+print('  Face landmarker done.')
 
 print(f'Pre-downloading whisper-{whisper_model}...')
 from faster_whisper import WhisperModel

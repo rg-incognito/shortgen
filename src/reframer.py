@@ -10,10 +10,38 @@ Pipeline:
 import os
 import subprocess
 import tempfile
+import urllib.request
 import numpy as np
 import cv2
 import mediapipe as mp
-_mp_face_mesh = mp.solutions.face_mesh
+from mediapipe.tasks import python as _mp_python
+from mediapipe.tasks.python import vision as _mp_vision
+
+_MODEL_URL  = ('https://storage.googleapis.com/mediapipe-models/'
+               'face_landmarker/face_landmarker/float16/1/face_landmarker.task')
+_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           '..', 'face_landmarker.task')
+
+
+def _ensure_landmarker_model():
+    if not os.path.exists(_MODEL_PATH):
+        print('  Downloading face_landmarker.task (~6 MB)...')
+        urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+        print('  Done.')
+
+
+def _create_face_landmarker():
+    _ensure_landmarker_model()
+    options = _mp_vision.FaceLandmarkerOptions(
+        base_options=_mp_python.BaseOptions(
+            model_asset_path=os.path.abspath(_MODEL_PATH)),
+        running_mode=_mp_vision.RunningMode.IMAGE,
+        num_faces=6,
+        min_face_detection_confidence=0.5,
+        min_face_presence_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+    return _mp_vision.FaceLandmarker.create_from_options(options)
 
 _OUT_W, _OUT_H = 1080, 1920
 _SAMPLE_FPS   = 3      # face-detection samples per second of source video
@@ -56,43 +84,37 @@ def _speech_frames(pipeline, wav_path, src_fps) -> set:
 def _sample_faces(video_path, start_sec, end_sec, src_fps) -> dict:
     """
     Returns {clip_frame_idx: [(nose_cx_norm, lip_openness), ...]}
-    Samples at _SAMPLE_FPS using FaceMesh (gives both position + lip data).
+    Samples at _SAMPLE_FPS using FaceLandmarker (mediapipe Tasks API).
     """
-    step = max(1, round(src_fps / _SAMPLE_FPS))
+    step    = max(1, round(src_fps / _SAMPLE_FPS))
     start_f = int(start_sec * src_fps)
     end_f   = int(end_sec   * src_fps)
 
     cap = cv2.VideoCapture(video_path)
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
 
-    face_mesh = _mp_face_mesh.FaceMesh(
-        max_num_faces=6,
-        refine_landmarks=False,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    )
-
+    landmarker = _create_face_landmarker()
     data = {}
-    for fi in range(end_f - start_f):
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if fi % step != 0:
-            continue
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        res = face_mesh.process(rgb)
-        faces = []
-        if res.multi_face_landmarks:
-            for lm in res.multi_face_landmarks:
-                pts = lm.landmark
-                cx        = pts[_NOSE_TIP].x
-                lip_open  = abs(pts[_LIP_BOT].y - pts[_LIP_TOP].y)
-                face_h    = abs(pts[_FACE_BOT].y - pts[_FACE_TOP].y) or 0.1
+    try:
+        for fi in range(end_f - start_f):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if fi % step != 0:
+                continue
+            rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result   = landmarker.detect(mp_image)
+            faces    = []
+            for face_lms in result.face_landmarks:
+                cx       = face_lms[_NOSE_TIP].x
+                lip_open = abs(face_lms[_LIP_BOT].y - face_lms[_LIP_TOP].y)
+                face_h   = abs(face_lms[_FACE_BOT].y - face_lms[_FACE_TOP].y) or 0.1
                 faces.append((cx, lip_open / face_h))
-        data[fi] = faces
-
-    cap.release()
-    face_mesh.close()
+            data[fi] = faces
+    finally:
+        cap.release()
+        landmarker.close()
     return data
 
 

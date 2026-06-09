@@ -6,3 +6,12 @@ tokens.txt
 yt_token.json
 *_secret.json
 oauth_client.json
+face_landmarker.task
+*.json
+!requirements*.txt
+local_test/cache/
+local_test/output/
+analytics_report.csv
+analytics_summary.txt
+*.mp4
+*.mkv

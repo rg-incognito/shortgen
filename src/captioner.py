@@ -1,9 +1,9 @@
 """
-Viral-style caption overlay — 4-word sliding blocks.
+Word-by-word karaoke caption overlay.
 
-Each block of 4 words is shown simultaneously.  The active word is highlighted
-yellow; the rest are white with a black outline.  When the active word advances
-past the 4th slot the entire block replaces itself with the next 4 words.
+Each spoken word pops on screen in yellow (uppercase) next to the upcoming word
+in white, both on a semi-transparent dark background box.  The box refreshes with
+every word, creating the viral Shorts pop effect.
 
 Timings come from Whisper word-level timestamps, remapped from episode time
 into the merged video's timeline using the story clip list.
@@ -23,14 +23,15 @@ _HOOK_SHADOW    = "&H80000000&" # Shadow
 
 # ASS style constants
 _FONT      = "Arial"
-_FONT_SIZE = 52          # pt, looks good at 1080 wide
+_FONT_SIZE = 72          # larger for word-by-word impact
 _OUT_W     = 1080
 _OUT_H     = 1920
-_Y_POS     = 1450        # px from top — clear of UI chrome at bottom
+_MARGIN_V  = 350         # px from bottom (alignment 2 = bottom-center)
 _WHITE     = "&H00FFFFFF&"
 _YELLOW    = "&H0000FFFF&"   # BGR in ASS = #FFFF00 = yellow
-_SHADOW    = "&H80000000&"
-_OUTLINE   = "&H00000000&"   # black outline
+_SHADOW    = "&H80000000&"   # kept for Hook style
+_OUTLINE   = "&H00000000&"
+_BOX_BG    = "&H40000000&"   # 75% opaque black box behind text
 
 
 def _remap_words(all_words, story_clips):
@@ -70,7 +71,13 @@ def _format_ass_time(seconds):
 
 
 def _build_ass(mapped_words, total_duration, yt_title=None):
-    """Generate ASS subtitle content with 4-word block highlighting."""
+    """
+    Word-by-word karaoke captions.
+
+    Each event shows 2 words: the active word (yellow) + the next word (white preview),
+    both rendered on a semi-transparent dark background box.  Words are uppercased.
+    The box appears/disappears with each spoken word, creating the viral Shorts pop effect.
+    """
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {_OUT_W}
@@ -79,8 +86,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{_FONT},{_FONT_SIZE},{_WHITE},&H000000FF&,{_OUTLINE},{_SHADOW},-1,0,0,0,100,100,0,0,1,3,1,8,30,30,{_Y_POS},1
-Style: Active,{_FONT},{_FONT_SIZE},{_YELLOW},&H000000FF&,{_OUTLINE},{_SHADOW},-1,0,0,0,100,100,0,0,1,3,1,8,30,30,{_Y_POS},1
+Style: Default,{_FONT},{_FONT_SIZE},{_WHITE},&H000000FF&,{_OUTLINE},{_BOX_BG},-1,0,0,0,100,100,0,0,3,0,0,2,20,20,{_MARGIN_V},1
 Style: Hook,{_FONT},{_HOOK_FONT_SIZE},{_HOOK_COLOR},&H000000FF&,{_HOOK_OUTLINE},{_HOOK_SHADOW},-1,0,0,0,100,100,0,0,1,3,1,2,30,30,{_HOOK_Y_POS},1
 
 [Events]
@@ -90,52 +96,38 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     if yt_title:
         hook_start_str = _format_ass_time(0.0)
-        hook_end_str   = _format_ass_time(0.5) # 0.5 seconds
-        # Use alignment 5 for middle-center (overrides style's default 2 for middle-center)
-        events.append(f"Dialogue: 0,{hook_start_str},{hook_end_str},Hook,,0,0,0,,{{\an5}}{yt_title}")
+        hook_end_str   = _format_ass_time(0.5)
+        events.append(f"Dialogue: 0,{hook_start_str},{hook_end_str},Hook,,0,0,0,,{{\\an5}}{yt_title}")
 
-    if not mapped_words and not yt_title:
-        return header
-    BLOCK       = 4
-    MAX_WORD_S  = 0.9   # max seconds any single word stays highlighted
-    CAPTION_LEAD = 0.15  # captions appear this many seconds before the word is spoken
+    if not mapped_words:
+        return header + "\n".join(events) + "\n"
 
-    # Group words into blocks of 4
-    blocks = [mapped_words[i:i + BLOCK] for i in range(0, len(mapped_words), BLOCK)]
+    MAX_WORD_S   = 0.9   # cap on how long one word stays on screen
+    CAPTION_LEAD = 0.10  # show slightly before the word is spoken
 
-    for b_idx, block in enumerate(blocks):
-        # Cap block end so it never bleeds into the next block
-        next_block_start = blocks[b_idx + 1][0]['start'] if b_idx + 1 < len(blocks) else None
-        block_end = min(block[-1]['end'], block[-1]['start'] + MAX_WORD_S)
-        if next_block_start is not None:
-            block_end = min(block_end, next_block_start - CAPTION_LEAD)
+    for i, word in enumerate(mapped_words):
+        seg_start = max(0.0, word['start'] - CAPTION_LEAD)
+        if i + 1 < len(mapped_words):
+            next_start = mapped_words[i + 1]['start']
+            seg_end = min(next_start - CAPTION_LEAD, word['start'] + MAX_WORD_S)
+        else:
+            seg_end = min(word['end'] + 0.15, total_duration)
+        if seg_end <= seg_start:
+            seg_end = seg_start + 0.05
 
-        for active_idx, active_word in enumerate(block):
-            seg_start = max(0.0, active_word['start'] - CAPTION_LEAD)
-            if active_idx + 1 < len(block):
-                next_start = block[active_idx + 1]['start']
-                raw_end = min(next_start, active_word['start'] + MAX_WORD_S)
-                seg_end = max(seg_start + 0.05, raw_end - CAPTION_LEAD)
-            else:
-                seg_end = block_end
+        active = word['word'].strip().upper()
+        if not active:
+            continue
 
-            if seg_end <= seg_start:
-                seg_end = seg_start + 0.05
+        if i + 1 < len(mapped_words):
+            upcoming = mapped_words[i + 1]['word'].strip().upper()
+            line = r"{\c" + _YELLOW + r"}" + active + r"{\c" + _WHITE + r"} " + upcoming
+        else:
+            line = r"{\c" + _YELLOW + r"}" + active
 
-            # Build the line: words before active=white, active=yellow, words after=white
-            parts = []
-            for j, w in enumerate(block):
-                text = w['word']
-                if j == active_idx:
-                    parts.append(r"{\c" + _YELLOW + r"}" + text + r"{\c" + _WHITE + r"}")
-                else:
-                    parts.append(text)
-
-            line = " ".join(parts).strip()
-
-            start_str = _format_ass_time(seg_start)
-            end_str   = _format_ass_time(seg_end)
-            events.append(f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{line}")
+        start_str = _format_ass_time(seg_start)
+        end_str   = _format_ass_time(seg_end)
+        events.append(f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{line}")
 
     return header + "\n".join(events) + "\n"
 
