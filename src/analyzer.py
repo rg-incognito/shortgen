@@ -30,16 +30,24 @@ def _gemini_post(payload, api_key, timeout=120):
 
 _PROMPT = """You are a viral short-form video editor working with Friends (US sitcom, 1994-2004).
 
-Your task: Create a ~30-second reel that tells ONE complete storyline in tight, punchy cuts — like a TikTok story recap.
+Your task: find the BEST short-form moment in this episode for a vertical reel under 35 seconds, and choose the FORMAT that fits it best.
 
-OUTPUT STRUCTURE (strictly in this order):
+FORMAT "standalone_scene" — use when ONE scene already works as a complete moment on its own:
+- A single continuous scene: an iconic monologue, a quotable line, a tight back-and-forth with a clean punchline, or one big reaction beat
+- 1-3 clips from that ONE scene, back-to-back (small dead-air/cutaway trims between them are fine)
+- Total duration: 10-25 seconds
+- Must be fully funny/emotional WITHOUT any other clips for context
+- First clip starts at the natural beginning of the moment — mid-sentence is fine if that's how it plays, but don't force an artificial "hook" cut from elsewhere
+
+FORMAT "story_recap" — use when the best moment NEEDS setup from earlier in the episode to land:
 1. HOOK (first clip, 3-5 sec) — the single most shocking/funny/relatable moment from the ENTIRE storyline. Does NOT need to be the chronological start. CRITICAL: the very first frame must start MID-ACTION — the character must already be mid-sentence, mid-reaction, or mid-punchline. NEVER open on someone walking in, sitting down, looking around, or any establishing shot. Start on the embarrassed face already in frame, the punchline already being delivered, the shocked reaction already happening.
 2. CONTEXT clips (2-4 clips, 3-6 sec each) — the minimum lines needed to understand why the hook moment is funny or emotionally powerful. Only the single KEY line or reaction per beat. Cut everything else.
 3. PAYOFF (last clip, 3-5 sec) — the final punchline, resolution, emotional reveal, or biggest laugh.
-
 TOTAL target: 25-30 seconds across all clips combined.
 
-Great storylines to look for — RANKED BY VIRAL POTENTIAL:
+Default to "standalone_scene" when a single scene is strong enough on its own — it feels like a real clip rather than an edit and often performs better. Use "story_recap" only when no single scene can stand alone and you genuinely need to connect a setup to a later payoff.
+
+Great storylines/moments to look for — RANKED BY VIRAL POTENTIAL:
 TIER 1 (highest views — pick these first):
 1. A romantic revelation or confession — Ross telling Rachel he loves her, Chandler proposing to Monica, any "I've always loved you" moment
 2. A plot twist or secret exposed — someone finds out something that changes everything, a lie finally unravels in front of everyone
@@ -62,32 +70,28 @@ Previously used segments (AVOID these timestamps): {used_segments}
 
 Return ONLY a valid JSON object — no markdown, no explanation:
 {{
+  "format": "standalone_scene",
   "storyline_title": "phoebe_bites_massage_client",
-  "storyline_summary": "Phoebe bites her client, panics, the gang reacts, she confesses",
+  "storyline_summary": "Phoebe bites her client mid-massage and tries to play it off",
   "series_tag": "phoebe_being_phoebe",
   "clips": [
     {{
       "start_seconds": 87.0,
       "end_seconds": 92.0,
-      "label": "hook",
-      "description": "Joey's face mid-shock when he hears Phoebe bit someone — starts on his expression already in frame"
+      "label": "scene",
+      "description": "Phoebe bites her client and immediately tries to act normal"
     }}
   ],
   "score": 9
 }}
 
 Rules:
-- 4 to 6 clips total
-- FIRST clip = hook (most viral moment, any timestamp) — first frame must be mid-action, never an establishing shot
-- LAST clip = payoff/punchline/resolution
-- Hook clip: 3-5 seconds only
-- Context clips: 3-6 seconds each — just the KEY line or reaction, nothing more
-- Total combined duration: 25-30 seconds
-- Clips (except the hook) should be in rough CHRONOLOGICAL ORDER
+- If format = "standalone_scene": 1-3 clips from ONE scene, label each "scene", total 10-25 seconds, clips in chronological order, may skip small dead-air/cutaway gaps but must otherwise read as one continuous moment
+- If format = "story_recap": 4-6 clips, FIRST clip labeled "hook" (most viral moment, any timestamp, first frame mid-action, never an establishing shot), LAST clip labeled "payoff" (punchline/resolution), middle clips labeled "context" (3-6 sec each, just the KEY line or reaction), total 25-30 seconds, clips other than the hook in rough CHRONOLOGICAL ORDER
 - Clips must NOT overlap each other or the previously-used segments
 - CRITICAL: Every clip must end at a natural sentence or speech pause — NEVER cut mid-word or mid-sentence. Extend end_seconds by 1-2s if needed to catch the full line.
 - Pick moments with a clear spoken punchline or strong visual reaction
-- Score 1-10 for viral potential as a compiled reel (10 = highest)
+- Score 1-10 for viral potential (10 = highest)
 - storyline_title: snake_case, max 40 chars
 - series_tag: pick exactly one — ross_being_ross | joey_being_joey | chandler_being_chandler | phoebe_being_phoebe | monica_being_monica | rachel_being_rachel | relationship_drama | gang_together"""
 
