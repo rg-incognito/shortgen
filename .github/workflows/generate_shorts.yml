@@ -32,12 +32,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Install system dependencies
+        run: sudo apt-get install -y libgl1 libgles2
 
       - name: Install ffmpeg
         run: |
@@ -47,7 +50,7 @@ jobs:
           rm -rf ffmpeg-master-latest-linux64-gpl*
 
       - name: Cache pip packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: pip-torch200-${{ hashFiles('requirements.txt') }}
@@ -59,7 +62,7 @@ jobs:
           pip install -r requirements.txt -c /tmp/constraints.txt
 
       - name: Cache HuggingFace models
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/huggingface/hub
           key: hf-whisper-${{ github.event.inputs.whisper_model || 'medium' }}-pyannote-3.1-v2
