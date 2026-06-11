@@ -40,7 +40,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install system dependencies
-        run: sudo apt-get install -y libgl1 libgles2
+        run: sudo apt-get install -y libgl1 libgles2 libegl1
 
       - name: Install ffmpeg
         run: |
