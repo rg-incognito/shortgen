@@ -1,6 +1,9 @@
 name: Generate Shorts
 
 on:
+  schedule:
+    - cron: '30 19 * * *'   # 1:00 AM IST
+    - cron: '30 17 * * *'   # 11:00 PM IST
   workflow_dispatch:
     inputs:
       video_file_id:
