@@ -50,11 +50,11 @@ def _split_by_speech(clip_start, clip_end, all_words):
 
 
 def create_story_short(video_path, story, output_dir, episode_name,
-                        pipeline=None, all_words=None, yt_title=None):
+                        pipeline=None, all_words=None):
     """
     Cuts every clip in a story arc, reframes each to 9:16, concatenates into
-    one compiled video, then burns viral-style captions if word timestamps
-    are provided.
+    one compiled video, then burns viral-style captions plus the persistent
+    hook banner if word timestamps are provided.
 
     When all_words is supplied, each story clip is first split into speech-only
     sub-clips (laugh-track / dead-air gaps removed) before reframing.
@@ -98,7 +98,8 @@ def create_story_short(video_path, story, output_dir, episode_name,
         out_path = os.path.join(output_dir, f"{episode_name}_{title}_s{score}.mp4")
         if all_words:
             print("  Burning captions...")
-            burn_captions(merged_path, out_path, all_words, expanded_clips, yt_title=yt_title)
+            burn_captions(merged_path, out_path, all_words, expanded_clips,
+                          hook_text=story.get('hook_text'), hook_emoji=story.get('hook_emoji'))
             os.unlink(merged_path)
         else:
             os.rename(merged_path, out_path)

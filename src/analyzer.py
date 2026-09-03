@@ -74,6 +74,8 @@ Return ONLY a valid JSON object — no markdown, no explanation:
   "storyline_title": "phoebe_bites_massage_client",
   "storyline_summary": "Phoebe bites her client mid-massage and tries to play it off",
   "series_tag": "phoebe_being_phoebe",
+  "hook_text": "PHOEBE BITES HER MASSAGE CLIENT",
+  "hook_emoji": "😳",
   "clips": [
     {{
       "start_seconds": 87.0,
@@ -93,7 +95,9 @@ Rules:
 - Pick moments with a clear spoken punchline or strong visual reaction
 - Score 1-10 for viral potential (10 = highest)
 - storyline_title: snake_case, max 40 chars
-- series_tag: pick exactly one — ross_being_ross | joey_being_joey | chandler_being_chandler | phoebe_being_phoebe | monica_being_monica | rachel_being_rachel | relationship_drama | gang_together"""
+- series_tag: pick exactly one — ross_being_ross | joey_being_joey | chandler_being_chandler | phoebe_being_phoebe | monica_being_monica | rachel_being_rachel | relationship_drama | gang_together
+- hook_text: 3-8 words, ALL CAPS, describing the clip's premise/moment WITHOUT giving away the punchline (e.g. "SHE BIT HER MASSAGE CLIENT", "ROSS SAYS THE WRONG NAME AT THE ALTAR", "THE ONE WITH THE FAKE BOYFRIEND"). This is burned onto the video as a persistent white banner across the top of the ENTIRE video (not just the opening) — it can be a touch more descriptive than a quick flash-hook since it stays visible throughout. Still separate from and shorter than the YouTube title.
+- hook_emoji: 1-2 emoji matching the COMEDIC reaction to this specific moment (e.g. 😳 😂 💀 🤦 😬 😏 👀 🙈 — pick whatever actually fits the clip's humor, don't default to the same one or two every time), or "" if none fit naturally — never force one"""
 
 
 _YT_PROMPT = """You are a YouTube content strategist for a Friends (US sitcom, 1994-2004) clips channel called "The One Where".
@@ -109,7 +113,6 @@ Score    : {score}/10
 Return ONLY valid JSON, no markdown:
 {{
   "title": "Nobody saw this coming from Phoebe",
-  "hook_text": "She bit her client and ran.",
   "description": "Phoebe actually bites someone during a massage — and the gang's reaction is everything.\\n\\nFriends | The One with the Ballroom Dancing\\n\\n📌 Subscribe for daily Friends moments — the best scenes cut down to under a minute.\\n\\n#Friends #FriendsTV #PhoebeBuffay #FriendsClips #Sitcom #FunnyMoments #90sTV #PhoebeBeingPhoebe #FriendsShorts #NBC",
   "tags": "Friends, Friends TV show, Phoebe Buffay, Friends clips, Friends funny moments, Friends compilation, sitcom, 90s TV, Lisa Kudrow, Friends shorts, comedy, NBC, Friends rewatch, Phoebe massage, Friends moments",
   "pinned_comment": "Phoebe really said bite first, apologise never 😭 Team Phoebe or Team Client? 👇"
@@ -117,7 +120,6 @@ Return ONLY valid JSON, no markdown:
 
 Rules:
 - title: Write a concise, curiosity-driven tease (max 80 chars) that hints at the clip's most impactful moment WITHOUT revealing what happens. Open a curiosity gap — the viewer MUST watch to find out. NEVER write a narrative sentence that describes the outcome or spoils the punchline. NO episode code. NO character brand prefix. NO emoji in the middle. Frame it as tension or surprise: "The moment [character] crossed a line", "Nobody expected [character] to do this", "Wait… did [character] really just say that?" — tease the feeling, not the resolution. One optional emoji at the very end only if it fits naturally.
-- hook_text: 5-9 word statement shown as a text overlay in the FIRST 0.5 SECONDS of the video before any dialogue is heard. Must create an information gap that makes the viewer need to keep watching. Write in third person, past or present tense. NO emoji. NO spoilers — reveal the situation or stakes, not the outcome. Strong examples: "She's been married this whole time." / "He kissed every man in the room." / "They bet the apartment and lost." / "Nobody expected him to say this." / "She found out everything." Weak examples (avoid): "Phoebe reacts to news" (too vague) / "The gang laughs at Joey" (describes the clip).
 - The best titles make viewers NEED to click — they hint at a shocking or funny situation without giving away what happens
 - description: 2-line punchy hook → blank line → show + episode name line (no season/episode code) → blank line → subscribe CTA → blank line → exactly 10 hashtags on one line
 - tags: exactly 15 tags, comma-separated, mix of broad (Friends) and specific (character, theme, relationship)
