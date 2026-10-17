@@ -2,7 +2,6 @@ name: Generate Shorts
 
 on:
   schedule:
-    - cron: '0 23 * * *'   # 7:00 PM US Eastern — North America evening prime time
     - cron: '0 1 * * *'    # 9:00 PM US Eastern — Solved w/ Mark Manson (Whop campaign)
     - cron: '0 0 * * *'    # 8:00 PM US Eastern — Love is Blind (Whop campaign)
     - cron: '0 2 * * *'    # 10:00 PM US Eastern — Love is Blind (Whop campaign)
@@ -11,7 +10,7 @@ on:
       campaign:
         description: 'Campaign profile (src/campaigns.py): friends | loveisblind | markmanson'
         required: false
-        default: 'friends'
+        default: 'loveisblind'
       video_file_id:
         description: 'Drive File ID — leave blank to auto-pick from videos/ folder'
         required: false
