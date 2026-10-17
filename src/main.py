@@ -227,6 +227,8 @@ def main():
         # Upload to YouTube as a scheduled post (requires YT_TOKEN_JSON secret)
         yt_video_id = None
         if yt_meta:
+            # Row must exist before update_yt_url fills in scheduled_at / yt_url.
+            tracker.log_posting_metadata(episode_name, current_run, story, yt_meta)
             from youtube_client import upload_scheduled, add_to_playlist
             publish_at = tracker.get_next_publish_slot()
             print(f"[5b] Scheduling on YouTube → {publish_at}...")
@@ -276,8 +278,6 @@ def main():
             for i, c in enumerate(story['clips'])
         ]
         tracker.log_clips(episode_name, current_run, clips_for_log)
-        if yt_meta:
-            tracker.log_posting_metadata(episode_name, current_run, story, yt_meta)
         print(f"      Logged run {current_run} to tracker sheet")
 
         if current_run >= max_runs and profile['archive']:
