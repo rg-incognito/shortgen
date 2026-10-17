@@ -189,6 +189,41 @@ CAMPAIGNS = {
         ],
         'transcript_banned': [r'\bfaze\b'],
     },
+
+    # Whop: Clip Farm — YoungLA (gym apparel). Brief: only footage from the
+    # YoungLA WORLD channel / listed videos, YoungLA clothing clearly visible,
+    # must NOT feel like an ad — caption must not mention YoungLA, no tagging
+    # accounts; funny organic caption; no NSFW/violence; YT/TT/IG.
+    'youngla': {
+        'source':       'release',
+        'release_tag':  'footage-youngla',
+        'files': [
+            ('HEJmXuhvACM', 'YLA_HEJmXuhvACM'),   # BODYBUILDERS VS ZOMBIE ESCAPE ROOM (30 min)
+            ('RYC97psjwzA', 'YLA_RYC97psjwzA'),   # Bodybuilders Try Soccer (25 min)
+            ('fupdRhE6RJQ', 'YLA_fupdRhE6RJQ'),   # Pretending To Be Millionaires In LA (14 min)
+            ('iQJfcQJ-ZtA', 'YLA_iQJfcQJ-ZtA'),   # Jay Cutler and Phil Heath Rank Our Athletes Physiques (13 min)
+            ('rDq33o8-Axk', 'YLA_rDq33o8-Axk'),   # iShowSpeed Vs. Bodybuilders (12 min)
+        ],
+        'max_runs':        3,
+        'archive':         False,
+        'silence_thresh':  0.6,
+        'wide_fallback':   True,
+        'min_seconds':     16.0,
+        'max_seconds':     58.0,
+        'playlist':        'Gym Moments',
+        'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/f40d3229-94a2-4886-b7cd-94fff1c5622f',
+        # Gym crowd: after-work gym / pre-bed scroll in the US, UK evening.
+        'publish_slots_et': ['14:00'],
+        # No required caption text: the brief wants it to look organic, not branded.
+        'banned_patterns': [
+            r'young\s?la', r'@\w+', r'\bsponsor', r'\b#?ad\b', r'\bshop\b', r'\blink\b', r'\bdiscount\b',
+            r'\bcode\b', r'\bmerch\b', r'\bsteroid', r'\bsex\b', r'\bnsfw\b',
+        ],
+        # Keep clips clean enough not to read as NSFW.
+        'transcript_banned': [
+            r'\bfuck', r'motherf', r'\bbitch', r'\bcunt\b', r'\bnigg', r'\bfag', r'\bretard',
+        ],
+    },
 }
 
 

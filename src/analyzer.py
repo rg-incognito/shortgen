@@ -406,7 +406,80 @@ Rules (brand requirements — breaking any of these gets the clip rejected):
 - pinned_comment: a short question that invites opinions on the moment."""
 
 
+_YLA_PROMPT = """You are a short-form video editor making organic, funny clips from YoungLA WORLD videos (gym creators and bodybuilders doing challenges, trips and pranks) for an official clipping campaign. The clip must feel like a normal fan clip, NOT an ad.
+
+Find the SINGLE best standalone moment in this episode for a vertical YouTube Short.
+
+WHAT WORKS (ranked):
+1. A genuinely funny or chaotic moment — a reaction, a roast, a fail, a ridiculous challenge moment
+2. A hype moment — a big lift, a win, a crazy stat, a celebrity guest moment
+3. A great one-liner exchange between the creators
+
+HARD RULES (the brand rejects clips that break these):
+- ONE continuous scene. 1-3 clips from that same scene, back-to-back, in chronological order.
+- Total duration 20-45 seconds (absolute limits 16-55 seconds). Hook in the first 2 seconds.
+- End on a punchline, reaction or finished line — NEVER mid-word or mid-sentence. Extend end_seconds by 1-2s to catch the full line.
+- Pick moments where the people are on camera (their clothing must be visible), not black screens, title cards or b-roll.
+- NEVER pick product promos, merch/discount/"link in bio" talk, sponsor reads, anything NSFW, violent, drug/steroid talk, or heavy swearing.
+- Clips must NOT overlap each other or the previously used segments.
+
+Previously used moments from this episode (AVOID these themes): {used_storylines}
+
+Previously used segments (AVOID these timestamps): {used_segments}
+
+Transcript (format: [start_sec - end_sec] text):
+{transcript}
+
+Return ONLY a valid JSON object — no markdown, no explanation:
+{{
+  "format": "standalone_scene",
+  "storyline_title": "bodybuilder_panics_in_escape_room",
+  "storyline_summary": "A huge bodybuilder completely loses it when the lights go out in the escape room",
+  "series_tag": "gym",
+  "hook_text": "HE WAS NOT READY FOR THIS",
+  "hook_emoji": "😭",
+  "clips": [
+    {{
+      "start_seconds": 812.0,
+      "end_seconds": 846.0,
+      "label": "scene",
+      "description": "The lights go out and he panics"
+    }}
+  ],
+  "score": 8
+}}
+
+Field rules:
+- storyline_title: snake_case, max 40 chars
+- series_tag: always "gym"
+- hook_text: 3-8 words, ALL CAPS, funny/curious, accurate to the moment. NEVER mention any brand, store or clothing. Burned onto the video as a banner for the whole clip.
+- hook_emoji: 1-2 emoji that fit (😭 💀 😂 🤯 💪) or ""
+- score: 1-10 viral potential"""
+
+_YLA_YT_PROMPT = """You write YouTube Shorts metadata for a funny gym/bodybuilder clip. It must read like a fan posting, never like an ad.
+
+Moment : {storyline}
+Summary: {summary}
+
+Return ONLY valid JSON, no markdown:
+{{
+  "title": "He was NOT built for escape rooms 😭",
+  "description": "The lights went out and the biggest guy in the room panicked.\\n\\n#gym #bodybuilding #gymtok #fitness #funny",
+  "tags": "gym, bodybuilding, gym humor, fitness, bodybuilder, funny gym, gym bros, workout, lifting, muscle, gym life, fitness funny, bodybuilders, challenge, funny moments",
+  "pinned_comment": "Who's the funniest one here? 👇"
+}}
+
+Rules (brand requirements — breaking any of these gets the clip rejected):
+- Describe ONLY what actually happens. Funny, short, conversational.
+- NEVER mention any brand, clothing, store, merch, discount, link or sponsor. NEVER tag or @ any account.
+- title: max 80 chars. description: 1 short line → blank line → max 5 hashtags (gym/fitness/funny only).
+- tags: exactly 15, comma-separated, no brand names.
+- Nothing NSFW, violent, drug/steroid related.
+- pinned_comment: a short fun question about the moment."""
+
+
 _PROMPTS = {
+    'youngla':        (_YLA_PROMPT, _YLA_YT_PROMPT),
     'loveisblind':    (_LIB_PROMPT, _LIB_YT_PROMPT),
     'markmanson':     (_SOLVED_PROMPT, _SOLVED_YT_PROMPT),
     'loveandjustice': (_LJ_PROMPT, _LJ_YT_PROMPT),
