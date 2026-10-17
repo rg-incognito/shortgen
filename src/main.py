@@ -15,7 +15,8 @@ from transcriber import transcribe_video
 from analyzer import analyze_transcript, generate_yt_metadata
 from clipper import create_story_short, edited_duration
 from sheet_tracker import SheetTracker
-from campaigns import get_campaign, find_banned, enforce_caption
+from campaigns import get_campaign, find_banned, find_transcript_banned, enforce_caption
+from footage import download_from_release, sponsor_segments
 
 VIDEOS_FOLDER_ID  = os.environ.get('VIDEOS_FOLDER_ID',  '1bIFaNpfBy1Bp9R14T22EV-hMsYYrLeTS')
 SHORTS_FOLDER_ID  = os.environ.get('SHORTS_FOLDER_ID',  '1kzFXWZQu8QQVtZKeAVvSgHcLaRFfK6tg')
@@ -59,6 +60,9 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
         banned = find_banned(story.get('hook_text', ''), profile)
         if banned:
             problems.append(f"hook uses banned words {banned}")
+        ad_hits = find_transcript_banned(story, all_words, profile)
+        if ad_hits:
+            problems.append(f"clip audio looks like an ad read {ad_hits}")
 
         if not problems:
             return story
@@ -109,7 +113,7 @@ def main():
 
     # Auto-pick if no file ID provided
     if not video_file_id:
-        if profile['source'] == 'drive_files':
+        if profile['source'] in ('drive_files', 'release'):
             print(f"[0/5] Auto-picking {campaign} episode...")
             video_file_id, episode_name = pick_from_files(profile['files'], tracker, max_runs)
             if not video_file_id:
@@ -141,7 +145,10 @@ def main():
         video_path = work_dir / f"{episode_name}.mp4"
 
         print("[1/5] Downloading video...")
-        download_video(video_file_id, str(video_path), service_account_info)
+        if profile['source'] == 'release':
+            download_from_release(profile['release_tag'], f"{video_file_id}.mp4", str(video_path))
+        else:
+            download_video(video_file_id, str(video_path), service_account_info)
         print(f"      {video_path.stat().st_size / 1e6:.1f} MB")
 
         # Long campaign episodes get clipped many times — transcribe each one once.
@@ -165,7 +172,12 @@ def main():
 
         print("[3/5] Analyzing for best story arc (Gemini)...")
         src_dur = _probe_duration(video_path)
-        story = _pick_story(segments, all_words, gemini_api_key, used_segments, used_storylines,
+        avoid_segments = list(used_segments)
+        if profile.get('sponsorblock'):
+            ads = sponsor_segments(video_file_id)
+            print(f"      Avoiding {len(ads)} known ad-read segment(s) (SponsorBlock)")
+            avoid_segments += ads
+        story = _pick_story(segments, all_words, gemini_api_key, avoid_segments, used_storylines,
                             campaign, profile, src_dur)
         total_sec = story.get('_edited_seconds', story.get('_total_seconds', 0))
         print(f"      Story: [{story['score']}/10] ({story.get('format', 'story_recap')}) {story['storyline_title']}  (~{total_sec:.0f}s total)")
@@ -186,7 +198,8 @@ def main():
         short_path = create_story_short(str(video_path), story, str(shorts_dir),
                                         episode_name, pipeline=diarization_pipeline,
                                         all_words=all_words,
-                                        silence_thresh=profile['silence_thresh'])
+                                        silence_thresh=profile['silence_thresh'],
+                                        wide_fallback=profile.get('wide_fallback', False))
 
         if profile.get('min_seconds') or profile.get('max_seconds'):
             final_dur = _probe_duration(short_path)

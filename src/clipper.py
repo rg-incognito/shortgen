@@ -60,7 +60,8 @@ def edited_duration(story, all_words, silence_thresh=_SILENCE_THRESH):
 
 
 def create_story_short(video_path, story, output_dir, episode_name,
-                        pipeline=None, all_words=None, silence_thresh=_SILENCE_THRESH):
+                        pipeline=None, all_words=None, silence_thresh=_SILENCE_THRESH,
+                        wide_fallback=False):
     """
     Cuts every clip in a story arc, reframes each to 9:16, concatenates into
     one compiled video, then burns viral-style captions plus the persistent
@@ -97,7 +98,8 @@ def create_story_short(video_path, story, output_dir, episode_name,
 
             for j, (sc_start, sc_end) in enumerate(sub_clips):
                 part_path = os.path.join(parts_dir, f"part_{i:02d}_{j:02d}.mp4")
-                reframe_clip(video_path, sc_start, sc_end, part_path, pipeline=pipeline)
+                reframe_clip(video_path, sc_start, sc_end, part_path, pipeline=pipeline,
+                             wide_fallback=wide_fallback)
                 part_paths.append(part_path)
                 expanded_clips.append({'start_seconds': sc_start, 'end_seconds': sc_end})
 

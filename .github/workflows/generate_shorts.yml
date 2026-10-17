@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       campaign:
-        description: 'Campaign profile (src/campaigns.py): friends | loveisblind'
+        description: 'Campaign profile (src/campaigns.py): friends | loveisblind | markmanson'
         required: false
         default: 'friends'
       video_file_id:
@@ -37,6 +37,8 @@ on:
 jobs:
   generate-shorts:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read   # gh release download (campaign footage)
     timeout-minutes: 120
 
     steps:
@@ -97,6 +99,7 @@ jobs:
           GOOGLE_CLIENT_SECRET:        ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
           HF_TOKEN:                    ${{ secrets.HF_TOKEN }}
+          GH_TOKEN:                    ${{ github.token }}
           SPREADSHEET_ID:              '1d-GID8JCIrw89ygIKXfsyT9Fe0qtxxmsUaKORuDliOM'
           # Scheduled runs can't pass inputs, so the cron slot decides the campaign.
           CAMPAIGN: ${{ github.event.inputs.campaign || ((github.event.schedule == '0 0 * * *' || github.event.schedule == '0 2 * * *') && 'loveisblind') || 'friends' }}

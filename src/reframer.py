@@ -155,6 +155,28 @@ def _build_cx_timeline(frame_data, speech_frames, total_frames, src_w) -> list:
     return result
 
 
+def _wide_timeline(frame_data, total_frames, window=3) -> list:
+    """
+    Per-frame True where no face was found (show the whole wide shot instead of
+    a crop). Majority vote over ±window samples (~1s at 3 fps) so the layout only
+    flips at real shot changes, not on a single missed detection.
+    """
+    sampled = sorted(frame_data.keys())
+    if not sampled:
+        return [False] * total_frames
+    raw = [not frame_data[fi] for fi in sampled]
+    voted = []
+    for i in range(len(raw)):
+        win = raw[max(0, i - window):i + window + 1]
+        voted.append(sum(win) * 2 > len(win))
+    result, j = [], 0
+    for f in range(total_frames):
+        while j + 1 < len(sampled) and abs(sampled[j + 1] - f) <= abs(sampled[j] - f):
+            j += 1
+        result.append(voted[j])
+    return result
+
+
 def _smooth(values, alpha):
     out = list(values)
     for i in range(1, len(out)):
@@ -163,10 +185,14 @@ def _smooth(values, alpha):
 
 
 def reframe_clip(video_path: str, start_sec: float, end_sec: float,
-                 output_path: str, pipeline=None) -> None:
+                 output_path: str, pipeline=None, wide_fallback: bool = False) -> None:
     """
     Produce a 1080x1920 vertical clip: black letterbox top/bottom, face-tracked
     crop filling 70% of output height at full output width.
+
+    wide_fallback: when no face is detected (e.g. a wide multi-person podcast
+    shot where faces are too small to find), show the whole frame at full width
+    instead of a blind centre crop that can land on empty space.
     """
     cap = cv2.VideoCapture(video_path)
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
@@ -210,6 +236,10 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
     half    = crop_w_disp / 2
     crop_cx = [max(half, min(src_w - half, cx)) for cx in crop_cx]
 
+    wide = _wide_timeline(frame_data, total_frames) if wide_fallback else [False] * total_frames
+    wide_h = int(_OUT_W * src_h / src_w)
+    wide_y = (_OUT_H - wide_h) // 2
+
     # --- Render: pipe raw BGR frames → ffmpeg → libx264 ---
     ffmpeg_cmd = [
         'ffmpeg', '-y',
@@ -233,14 +263,17 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
         if not ret:
             break
 
-        cx = int(crop_cx[fi])
-        x1 = max(0, min(cx - crop_w_disp // 2, src_w - crop_w_disp))
-
-        # Black canvas with face-tracked crop centered vertically
-        fg     = cv2.resize(frame[:, x1:x1 + crop_w_disp], (_OUT_W, fg_disp_h),
-                            interpolation=cv2.INTER_LANCZOS4)
         canvas = black_bg.copy()
-        canvas[fg_y:fg_y + fg_disp_h, :] = fg
+        if fi < len(wide) and wide[fi]:
+            canvas[wide_y:wide_y + wide_h, :] = cv2.resize(
+                frame, (_OUT_W, wide_h), interpolation=cv2.INTER_AREA)
+        else:
+            cx = int(crop_cx[fi])
+            x1 = max(0, min(cx - crop_w_disp // 2, src_w - crop_w_disp))
+            # Black canvas with face-tracked crop centered vertically
+            fg = cv2.resize(frame[:, x1:x1 + crop_w_disp], (_OUT_W, fg_disp_h),
+                            interpolation=cv2.INTER_LANCZOS4)
+            canvas[fg_y:fg_y + fg_disp_h, :] = fg
         proc.stdin.write(canvas.tobytes())
 
     cap.release()

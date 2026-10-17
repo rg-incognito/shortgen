@@ -24,10 +24,11 @@ SPREADSHEET_ID = '1d-GID8JCIrw89ygIKXfsyT9Fe0qtxxmsUaKORuDliOM'
 SHEET          = 'PostingTracker'
 WHOP_COL       = 'M'   # column after created_at (L)
 
-# Episode-name prefix → campaign profile, for rows written by campaign runs.
-_PREFIXES = {
-    name: {ep.split('_S')[0] + '_' for _, ep in prof.get('files', [])}
+# Episode name → campaign profile, for rows written by campaign runs.
+_EPISODES = {
+    ep: name
     for name, prof in CAMPAIGNS.items() if prof.get('whop_campaign')
+    for _, ep in prof.get('files', [])
 }
 
 
@@ -44,10 +45,7 @@ def _rows(svc):
 
 
 def _campaign_for(episode):
-    for name, prefixes in _PREFIXES.items():
-        if any(episode.startswith(p) for p in prefixes):
-            return name
-    return None
+    return _EPISODES.get(episode)
 
 
 def due():

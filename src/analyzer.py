@@ -203,13 +203,94 @@ Rules (brand requirements — breaking any of these gets the clip rejected):
 - pinned_comment: a question that invites opinions on the situation (not on anyone's looks or character)."""
 
 
+_SOLVED_PROMPT = """You are a short-form editor clipping "Solved with Mark Manson" (self-improvement podcast) for an official, brand-approved clipping campaign.
+
+Find the SINGLE best standalone moment in this episode for a vertical YouTube Short.
+
+WHAT WORKS — pick ONE of these shapes:
+1. Blunt reframe — Mark states a counter-intuitive idea with no setup needed ("Most people think X. It's actually Y.")
+2. Problem → answer — a common struggle named, then Mark's clear answer
+3. Short story with a turn — a story that pivots and lands on a point
+Best topics for YouTube: values, purpose, big life questions, personal growth, decision-making, failure, anxiety, meaning.
+
+HARD RULES (the brand rejects clips that break these):
+- ONE continuous passage. 1-2 clips, back-to-back, chronological. Total 30-50 seconds (absolute limits 22-55s).
+- It must be a COMPLETE thought: starts where the idea starts, ends after the point lands. Never cut mid-thought or mid-sentence. Extend end_seconds by 1-2s to catch the full line.
+- The clip must OPEN with Mark Manson himself speaking (he must be on screen in the first 5 seconds). If a co-host or guest speaks first in the passage, start later.
+- NEVER include ad reads, sponsor mentions, promo codes, "this episode is brought to you by", or any other brand.
+- Never change the meaning of what was said — don't start or stop the clip so a quote means something different.
+- Nothing NSFW, violent, or political.
+- Clips must NOT overlap each other or the previously used segments (these also include known ad-read segments).
+
+Previously used moments from this episode (AVOID these ideas): {used_storylines}
+
+Previously used / forbidden segments (AVOID these timestamps): {used_segments}
+
+Transcript (format: [start_sec - end_sec] text):
+{transcript}
+
+Return ONLY a valid JSON object — no markdown, no explanation:
+{{
+  "format": "standalone_scene",
+  "storyline_title": "failure_is_the_tuition",
+  "storyline_summary": "Mark argues failure feels worse than it is because we treat it as identity instead of information",
+  "series_tag": "solved",
+  "hook_text": "WHY FAILURE HURTS MORE THAN IT SHOULD",
+  "hook_emoji": "",
+  "clips": [
+    {{
+      "start_seconds": 512.0,
+      "end_seconds": 551.0,
+      "label": "scene",
+      "description": "Mark reframes failure as information, ends on the key line"
+    }}
+  ],
+  "score": 8
+}}
+
+Field rules:
+- storyline_title: snake_case, max 40 chars
+- series_tag: always "solved"
+- hook_text: 3-9 words, ALL CAPS, states the idea or the question the clip answers — accurate to what Mark actually says, not clickbait. Burned onto the video as a banner for the whole clip.
+- hook_emoji: usually "" for this show; at most one subtle emoji if it really fits
+- score: 1-10 viral potential"""
+
+
+_SOLVED_YT_PROMPT = """You write YouTube Shorts metadata for an official clip of the podcast "Solved with Mark Manson".
+
+Moment : {storyline}
+Summary: {summary}
+
+Return ONLY valid JSON, no markdown:
+{{
+  "title": "Failure isn't the problem. This is.",
+  "description": "Most people treat failure as a verdict on who they are. Mark Manson explains why it's just information.\\n\\nFrom Solved with Mark Manson @solvedpodcast @iammarkmanson\\n\\n#markmanson #solvedpodcast #selfimprovement #psychology #mindset",
+  "tags": "Mark Manson, Solved with Mark Manson, Solved podcast, self improvement, personal growth, psychology, mindset, failure, motivation, life advice, podcast clips, Mark Manson podcast, meaning, purpose, self help",
+  "pinned_comment": "Do you agree with Mark on this? 👇"
+}}
+
+Rules (brand requirements — breaking them gets the clip rejected):
+- Lead with the IDEA in the clip, not a summary of the show. Describe only what Mark actually says — never misrepresent him, no clickbait.
+- title: max 80 chars, punchy, no emoji spam.
+- description: 1-2 lines on the idea → blank line → a line containing "@solvedpodcast" and "@iammarkmanson" → blank line → max 5 hashtags.
+- tags: exactly 15, comma-separated.
+- Never mention sponsors, promo codes or other brands. Nothing political or NSFW.
+- pinned_comment: a genuine question about the idea that invites discussion."""
+
+
+_PROMPTS = {
+    'loveisblind': (_LIB_PROMPT, _LIB_YT_PROMPT),
+    'markmanson':  (_SOLVED_PROMPT, _SOLVED_YT_PROMPT),
+}
+
+
 def generate_yt_metadata(story, episode_name, api_key, retries=3, campaign='friends'):
     import re
     api_key = api_key.strip()
     m = re.search(r'[Ss](\d+)[Ee](\d+)', episode_name)
     ep_str = f"S{int(m.group(1))}E{int(m.group(2))}" if m else episode_name
 
-    template = _LIB_YT_PROMPT if campaign == 'loveisblind' else _YT_PROMPT
+    template = _PROMPTS.get(campaign, (_PROMPT, _YT_PROMPT))[1]
     prompt = template.format(
         episode_str=ep_str,
         storyline=story['storyline_title'].replace('_', ' '),
@@ -249,7 +330,7 @@ def analyze_transcript(segments, api_key, used_segments=None, used_storylines=No
     storylines_str = (
         '; '.join(used_storylines) if used_storylines else 'none'
     )
-    template = _LIB_PROMPT if campaign == 'loveisblind' else _PROMPT
+    template = _PROMPTS.get(campaign, (_PROMPT, _YT_PROMPT))[0]
     prompt = template.format(
         transcript=transcript_text,
         used_segments=used_str,
