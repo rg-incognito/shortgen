@@ -198,11 +198,11 @@ CAMPAIGNS = {
         'source':       'release',
         'release_tag':  'footage-youngla',
         'files': [
-            ('HEJmXuhvACM', 'YLA_HEJmXuhvACM'),   # BODYBUILDERS VS ZOMBIE ESCAPE ROOM (30 min)
+            # Bright, face-on footage first; the zombie escape room is too dark to show the clothing.
+            ('rDq33o8-Axk', 'YLA_rDq33o8-Axk'),   # iShowSpeed Vs. Bodybuilders (12 min)
+            ('iQJfcQJ-ZtA', 'YLA_iQJfcQJ-ZtA'),   # Jay Cutler and Phil Heath Rank Our Athletes Physiques (13 min)
             ('RYC97psjwzA', 'YLA_RYC97psjwzA'),   # Bodybuilders Try Soccer (25 min)
             ('fupdRhE6RJQ', 'YLA_fupdRhE6RJQ'),   # Pretending To Be Millionaires In LA (14 min)
-            ('iQJfcQJ-ZtA', 'YLA_iQJfcQJ-ZtA'),   # Jay Cutler and Phil Heath Rank Our Athletes Physiques (13 min)
-            ('rDq33o8-Axk', 'YLA_rDq33o8-Axk'),   # iShowSpeed Vs. Bodybuilders (12 min)
         ],
         'max_runs':        3,
         'archive':         False,

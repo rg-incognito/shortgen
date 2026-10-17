@@ -68,7 +68,7 @@ Transcript (format: [start_sec - end_sec] text):
 
 Previously used segments (AVOID these timestamps): {used_segments}
 
-Return ONLY a valid JSON object — no markdown, no explanation:
+Return ONLY a valid JSON object — no markdown, no explanation. The example below only shows the SHAPE: its timestamps, titles and hook are placeholders — use real timestamps and wording from THIS transcript:
 {{
   "format": "standalone_scene",
   "storyline_title": "phoebe_bites_massage_client",
@@ -152,7 +152,7 @@ Previously used segments (AVOID these timestamps): {used_segments}
 Transcript (format: [start_sec - end_sec] text):
 {transcript}
 
-Return ONLY a valid JSON object — no markdown, no explanation:
+Return ONLY a valid JSON object — no markdown, no explanation. The example below only shows the SHAPE: its timestamps, titles and hook are placeholders — use real timestamps and wording from THIS transcript:
 {{
   "format": "standalone_scene",
   "storyline_title": "pods_secret_confession",
@@ -162,8 +162,8 @@ Return ONLY a valid JSON object — no markdown, no explanation:
   "hook_emoji": "😳",
   "clips": [
     {{
-      "start_seconds": 812.0,
-      "end_seconds": 846.0,
+      "start_seconds": 0.0,
+      "end_seconds": 0.0,
       "label": "scene",
       "description": "Her confession and his stunned reaction"
     }}
@@ -230,7 +230,7 @@ Previously used / forbidden segments (AVOID these timestamps): {used_segments}
 Transcript (format: [start_sec - end_sec] text):
 {transcript}
 
-Return ONLY a valid JSON object — no markdown, no explanation:
+Return ONLY a valid JSON object — no markdown, no explanation. The example below only shows the SHAPE: its timestamps, titles and hook are placeholders — use real timestamps and wording from THIS transcript:
 {{
   "format": "standalone_scene",
   "storyline_title": "failure_is_the_tuition",
@@ -313,7 +313,7 @@ WHAT WORKS (ranked):
 3. A relatable relationship question with a clear answer
 
 """ + _HS_SCENE_RULES + """
-Return ONLY a valid JSON object — no markdown, no explanation:
+Return ONLY a valid JSON object — no markdown, no explanation. The example below only shows the SHAPE: its timestamps, titles and hook are placeholders — use real timestamps and wording from THIS transcript:
 {{
   "format": "standalone_scene",
   "storyline_title": "zach_rules_who_is_wrong",
@@ -323,8 +323,8 @@ Return ONLY a valid JSON object — no markdown, no explanation:
   "hook_emoji": "⚖️",
   "clips": [
     {{
-      "start_seconds": 812.0,
-      "end_seconds": 846.0,
+      "start_seconds": 0.0,
+      "end_seconds": 0.0,
       "label": "scene",
       "description": "Zach's verdict and the couple's reaction"
     }}
@@ -364,7 +364,7 @@ WHAT WORKS (ranked):
 3. A funny or hype exchange between MatCrackz and the celebrity guest
 
 """ + _HS_SCENE_RULES + """
-Return ONLY a valid JSON object — no markdown, no explanation:
+Return ONLY a valid JSON object — no markdown, no explanation. The example below only shows the SHAPE: its timestamps, titles and hook are placeholders — use real timestamps and wording from THIS transcript:
 {{
   "format": "standalone_scene",
   "storyline_title": "sixty_thousand_dollar_pull",
@@ -374,8 +374,8 @@ Return ONLY a valid JSON object — no markdown, no explanation:
   "hook_emoji": "🤯",
   "clips": [
     {{
-      "start_seconds": 812.0,
-      "end_seconds": 846.0,
+      "start_seconds": 0.0,
+      "end_seconds": 0.0,
       "label": "scene",
       "description": "The pull and the reaction"
     }}
@@ -419,7 +419,7 @@ HARD RULES (the brand rejects clips that break these):
 - ONE continuous scene. 1-3 clips from that same scene, back-to-back, in chronological order.
 - Total duration 20-45 seconds (absolute limits 16-55 seconds). Hook in the first 2 seconds.
 - End on a punchline, reaction or finished line — NEVER mid-word or mid-sentence. Extend end_seconds by 1-2s to catch the full line.
-- Pick moments where the people are on camera (their clothing must be visible), not black screens, title cards or b-roll.
+- Pick moments where the people are clearly on camera facing it, in good light (their clothing must be visible) — not dark rooms, night-vision, black screens, title cards or b-roll.
 - NEVER pick product promos, merch/discount/"link in bio" talk, sponsor reads, anything NSFW, violent, drug/steroid talk, or heavy swearing.
 - Clips must NOT overlap each other or the previously used segments.
 
@@ -430,7 +430,7 @@ Previously used segments (AVOID these timestamps): {used_segments}
 Transcript (format: [start_sec - end_sec] text):
 {transcript}
 
-Return ONLY a valid JSON object — no markdown, no explanation:
+Return ONLY a valid JSON object — no markdown, no explanation. The example below only shows the SHAPE: its timestamps, titles and hook are placeholders — use real timestamps and wording from THIS transcript:
 {{
   "format": "standalone_scene",
   "storyline_title": "bodybuilder_panics_in_escape_room",
@@ -440,8 +440,8 @@ Return ONLY a valid JSON object — no markdown, no explanation:
   "hook_emoji": "😭",
   "clips": [
     {{
-      "start_seconds": 812.0,
-      "end_seconds": 846.0,
+      "start_seconds": 0.0,
+      "end_seconds": 0.0,
       "label": "scene",
       "description": "The lights go out and he panics"
     }}
@@ -463,8 +463,8 @@ Summary: {summary}
 
 Return ONLY valid JSON, no markdown:
 {{
-  "title": "He was NOT built for escape rooms 😭",
-  "description": "The lights went out and the biggest guy in the room panicked.\\n\\n#gym #bodybuilding #gymtok #fitness #funny",
+  "title": "<short funny title about THIS moment> 😭",
+  "description": "<one line on what actually happens>\\n\\n#gym #bodybuilding #gymtok #fitness #funny",
   "tags": "gym, bodybuilding, gym humor, fitness, bodybuilder, funny gym, gym bros, workout, lifting, muscle, gym life, fitness funny, bodybuilders, challenge, funny moments",
   "pinned_comment": "Who's the funniest one here? 👇"
 }}
