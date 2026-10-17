@@ -6,7 +6,16 @@ Whop Content Rewards campaign: footage comes from the brand's own Drive files,
 and the brief's hard rules (clip length, required caption text, banned topics)
 are enforced in code rather than trusted to the LLM.
 """
+import datetime
 import re
+from zoneinfo import ZoneInfo
+
+# Publish times are set in US Eastern (the payout audience is 40%+ US/UK/CA/AU,
+# mostly US) so they follow daylight saving. Picked per niche for habit-scroll
+# moments: in bed in the morning, lunch, after school/work, late night in bed.
+_ET = ZoneInfo('America/New_York')
+_PROCESSING_MIN = 15      # YouTube needs a few minutes before a scheduled publish
+_LATE_GRACE_MIN = 90      # run finished a bit after its slot -> publish ASAP, not tomorrow
 
 CAMPAIGNS = {
     'friends': {
@@ -41,6 +50,8 @@ CAMPAIGNS = {
         'min_seconds':     16.0,
         'max_seconds':     58.0,
         'playlist':        'Love Is Blind',
+        # Women 18-34: lunch-break scroll (UK 5:30 PM commute) + US late night in bed.
+        'publish_slots_et': ['12:30', '21:30'],
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/382b0008-cecb-4b86-89a1-e5c8ef074ca7',
         'required_caption': ['Love Is Blind', 'Netflix', '#loveisblind'],
         'caption_footer':   'Watch Love Is Blind on Netflix.\n\n#loveisblind #LoveIsBlindNetflix #Netflix #realitytv #dating',
@@ -88,6 +99,8 @@ CAMPAIGNS = {
         'max_seconds':     58.0,
         'sponsorblock':    True,
         'playlist':        'Solved with Mark Manson',
+        # Self-improvement: morning-in-bed / commute scroll (UK lunch).
+        'publish_slots_et': ['07:00'],
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/6bdc8e4b-3ebf-44f1-aedb-067589ca9c89',
         'required_caption': ['@solvedpodcast', '@iammarkmanson'],
         'caption_footer':   'From Solved with Mark Manson @solvedpodcast @iammarkmanson\n\n#markmanson #solvedpodcast #selfimprovement #psychology #mindset',
@@ -125,6 +138,8 @@ CAMPAIGNS = {
         'min_seconds':     16.0,
         'max_seconds':     58.0,
         'playlist':        'Love & Justice',
+        # Relationship drama: after-work scroll (UK 11 PM in-bed scroll).
+        'publish_slots_et': ['18:00'],
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/3b59058d-81d1-489b-bf54-97375caa10ad',
         'required_caption': ['#LOVEANDJUSTICE', '@HardScopeTV'],
         'caption_footer':   'Full episode of Love & Justice on @HardScopeTV\n\n#LOVEANDJUSTICE #relationships #couples #dating',
@@ -156,6 +171,8 @@ CAMPAIGNS = {
         'min_seconds':     16.0,
         'max_seconds':     58.0,
         'playlist':        'Unpacked',
+        # Collectibles, younger male audience: after school/work (UK 9 PM).
+        'publish_slots_et': ['16:00'],
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/c85645f1-b75f-49e2-91d5-988cf9b3fadb',
         # Each episode is its own Whop campaign; submitting to the wrong one is a ban.
         'whop_campaigns': {
@@ -173,6 +190,33 @@ CAMPAIGNS = {
         'transcript_banned': [r'\bfaze\b'],
     },
 }
+
+
+def next_publish_time(profile, now=None):
+    """
+    Next publishAt (UTC ISO 'Z') for the profile's niche slots, or None if the
+    profile has none (publish right away). A run that finishes shortly after a
+    slot publishes as soon as possible rather than waiting a whole day.
+    """
+    slots = profile.get('publish_slots_et')
+    if not slots:
+        return None
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    earliest = now + datetime.timedelta(minutes=_PROCESSING_MIN)
+    today = now.astimezone(_ET).date()
+    times = []
+    for day in range(-1, 3):
+        d = today + datetime.timedelta(days=day)
+        for hhmm in slots:
+            h, m = map(int, hhmm.split(':'))
+            times.append(datetime.datetime(d.year, d.month, d.day, h, m, tzinfo=_ET)
+                         .astimezone(datetime.timezone.utc))
+    if any(earliest - datetime.timedelta(minutes=_LATE_GRACE_MIN + _PROCESSING_MIN) < t < earliest
+           for t in times):
+        pick = earliest
+    else:
+        pick = min(t for t in times if t >= earliest)
+    return pick.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def get_campaign(name):

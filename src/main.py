@@ -16,7 +16,8 @@ from transcriber import transcribe_video
 from analyzer import analyze_transcript, generate_yt_metadata
 from clipper import create_story_short, edited_duration
 from sheet_tracker import SheetTracker
-from campaigns import get_campaign, find_banned, find_transcript_banned, enforce_caption
+from campaigns import (get_campaign, find_banned, find_transcript_banned, enforce_caption,
+                       next_publish_time)
 from footage import download_from_release, sponsor_segments
 
 VIDEOS_FOLDER_ID  = os.environ.get('VIDEOS_FOLDER_ID',  '1bIFaNpfBy1Bp9R14T22EV-hMsYYrLeTS')
@@ -230,7 +231,7 @@ def main():
             # Row must exist before update_yt_url fills in scheduled_at / yt_url.
             tracker.log_posting_metadata(episode_name, current_run, story, yt_meta)
             from youtube_client import upload_scheduled, add_to_playlist
-            publish_at = tracker.get_next_publish_slot()
+            publish_at = next_publish_time(profile) or tracker.get_next_publish_slot()
             print(f"[5b] Scheduling on YouTube → {publish_at}...")
             yt_video_id = upload_scheduled(
                 short_path,
