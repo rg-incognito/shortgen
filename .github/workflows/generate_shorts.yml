@@ -4,8 +4,14 @@ on:
   schedule:
     - cron: '0 23 * * *'   # 7:00 PM US Eastern — North America evening prime time
     - cron: '0 1 * * *'    # 9:00 PM US Eastern — North America evening prime time
+    - cron: '0 0 * * *'    # 8:00 PM US Eastern — Love is Blind (Whop campaign)
+    - cron: '0 2 * * *'    # 10:00 PM US Eastern — Love is Blind (Whop campaign)
   workflow_dispatch:
     inputs:
+      campaign:
+        description: 'Campaign profile (src/campaigns.py): friends | loveisblind'
+        required: false
+        default: 'friends'
       video_file_id:
         description: 'Drive File ID — leave blank to auto-pick from videos/ folder'
         required: false
@@ -92,6 +98,8 @@ jobs:
           GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
           HF_TOKEN:                    ${{ secrets.HF_TOKEN }}
           SPREADSHEET_ID:              '1d-GID8JCIrw89ygIKXfsyT9Fe0qtxxmsUaKORuDliOM'
+          # Scheduled runs can't pass inputs, so the cron slot decides the campaign.
+          CAMPAIGN: ${{ github.event.inputs.campaign || ((github.event.schedule == '0 0 * * *' || github.event.schedule == '0 2 * * *') && 'loveisblind') || 'friends' }}
           VIDEO_FILE_ID:               ${{ github.event.inputs.video_file_id }}
           EPISODE_NAME:                ${{ github.event.inputs.episode_name }}
           WHISPER_MODEL:               ${{ github.event.inputs.whisper_model || 'medium' }}

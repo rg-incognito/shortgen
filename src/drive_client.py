@@ -1,6 +1,8 @@
+import io
+import json
 import os
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload, MediaIoBaseUpload
 from google.oauth2 import credentials as oauth2_credentials
 
 
@@ -47,6 +49,18 @@ def pick_video(folder_id, credentials_info, tracker, max_runs=3):
     return None, None
 
 
+def pick_from_files(files, tracker, max_runs):
+    """
+    Like pick_video, but over a fixed list of (file_id, episode_name) — used for
+    campaign footage that lives in someone else's Drive and can't be archived.
+    Works through episodes in order, finishing one before starting the next.
+    """
+    for file_id, episode in files:
+        if tracker.get_run_count(episode) < max_runs:
+            return file_id, episode
+    return None, None
+
+
 def _get_or_create_folder(name, parent_id, svc):
     res = svc.files().list(
         q=(f"'{parent_id}' in parents and name='{name}' "
@@ -89,6 +103,33 @@ def download_video(file_id, output_path, credentials_info):
         while not done:
             status, done = dl.next_chunk(num_retries=5)
             print(f"  Download {int(status.progress() * 100)}%")
+
+
+def load_transcript_cache(cache_name, parent_folder_id):
+    """Return the cached {'segments', 'words'} dict from <parent>/transcripts/, or None."""
+    svc = _svc()
+    folder_id = _get_or_create_folder('transcripts', parent_folder_id, svc)
+    res = svc.files().list(
+        q=f"'{folder_id}' in parents and name='{cache_name}' and trashed=false",
+        fields='files(id)',
+    ).execute(num_retries=5)
+    files = res.get('files', [])
+    if not files:
+        return None
+    raw = svc.files().get_media(fileId=files[0]['id']).execute(num_retries=5)
+    return json.loads(raw)
+
+
+def save_transcript_cache(cache_name, parent_folder_id, segments, words):
+    """Store a transcript in <parent>/transcripts/ so later runs skip Whisper."""
+    svc = _svc()
+    folder_id = _get_or_create_folder('transcripts', parent_folder_id, svc)
+    body = json.dumps({'segments': segments, 'words': words}).encode('utf-8')
+    media = MediaIoBaseUpload(io.BytesIO(body), mimetype='application/json')
+    svc.files().create(
+        body={'name': cache_name, 'parents': [folder_id]},
+        media_body=media, fields='id',
+    ).execute(num_retries=5)
 
 
 def upload_shorts(file_paths, folder_id, credentials_info):

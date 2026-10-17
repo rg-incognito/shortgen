@@ -127,13 +127,90 @@ Rules:
 - pinned_comment: must be ONE of these formats — (a) polarizing take specific to this clip: "Team X or Team Y? 👇", (b) ranking prompt: "Rate this [character] moment 1-10 👇", (c) completion gap: "What did [character] say next? 👇". NEVER generic. Must reference the specific characters or situation from THIS clip."""
 
 
-def generate_yt_metadata(story, episode_name, api_key, retries=3):
+_LIB_PROMPT = """You are a short-form video editor clipping Netflix's dating reality show "Love Is Blind" (Season 11) for an official Netflix-approved clipping campaign. The goal: get people talking about the show and send them to Netflix.
+
+Find the SINGLE best standalone moment in this episode for a vertical YouTube Short.
+
+WHAT WORKS (ranked):
+1. Drama or a plot twist — a confession, a secret coming out, a fight in the pods, an unexpected answer, a cliffhanger line
+2. Real, raw conversation between cast members — a vulnerable admission, a hard question, a moment of chemistry
+3. Sweet or funny moments — a proposal, a first reaction, a laugh that lands, an awkward beat played for comedy
+
+HARD RULES (a clip that breaks any of these is rejected by the brand):
+- ONE continuous scene. 1-3 clips from that same scene, back-to-back, in chronological order.
+- Total duration 25-45 seconds (absolute limits 18-55 seconds). It must feel complete on its own: a setup and a payoff, not a fragment.
+- The moment must have a clear story — no random footage, no "nothing happens" clips.
+- Never pick content that mocks or humiliates a cast member, anything sexual/explicit, violent, political, or racist.
+- Start at the natural start of the beat (mid-sentence is fine if that's how it plays). End on a finished line or a reaction — NEVER mid-word or mid-sentence. Extend end_seconds by 1-2s to catch the full line.
+- Clips must NOT overlap each other or the previously used segments.
+
+Previously used moments from this episode (AVOID these themes): {used_storylines}
+
+Previously used segments (AVOID these timestamps): {used_segments}
+
+Transcript (format: [start_sec - end_sec] text):
+{transcript}
+
+Return ONLY a valid JSON object — no markdown, no explanation:
+{{
+  "format": "standalone_scene",
+  "storyline_title": "pods_secret_confession",
+  "storyline_summary": "She admits something in the pods that changes how he sees her",
+  "series_tag": "love_is_blind",
+  "hook_text": "SHE DIDN'T EXPECT THAT ANSWER",
+  "hook_emoji": "😳",
+  "clips": [
+    {{
+      "start_seconds": 812.0,
+      "end_seconds": 846.0,
+      "label": "scene",
+      "description": "Her confession and his stunned reaction"
+    }}
+  ],
+  "score": 8
+}}
+
+Field rules:
+- storyline_title: snake_case, max 40 chars
+- series_tag: always "love_is_blind"
+- hook_text: 3-8 words, ALL CAPS, teases the moment WITHOUT spoiling the payoff. Neutral or warm — NEVER insulting a cast member (no "crazy", "psycho", "delusional", "toxic", etc.) and nothing sexual. Do not name any other show or streaming service. It is burned onto the video as a banner for the whole clip.
+- hook_emoji: 1-2 emoji that fit the moment (😳 😭 👀 🥹 😬 💍 ❤️ …) or "" if none fit
+- score: 1-10 viral potential"""
+
+
+_LIB_YT_PROMPT = """You write YouTube Shorts metadata for an official clip of Netflix's "Love Is Blind" (Season 11).
+
+Episode  : {episode_str}
+Moment   : {storyline}
+Summary  : {summary}
+
+Return ONLY valid JSON, no markdown:
+{{
+  "title": "She did not see that answer coming 😳 #loveisblind",
+  "description": "One question in the pods and everything changed.\\nWould you have stayed after hearing that?\\n\\nLove Is Blind Season 11 is streaming now on Netflix.\\n\\n#loveisblind #LoveIsBlindNetflix #Netflix #realitytv #dating",
+  "tags": "Love Is Blind, Love Is Blind Netflix, Love Is Blind Season 11, Netflix, Netflix reality, reality TV, dating show, the pods, Love Is Blind clips, Love Is Blind moments, engaged, proposal, relationships, dating, reality tv clips",
+  "pinned_comment": "Would you have said yes after that? 👇"
+}}
+
+Rules (brand requirements — breaking any of these gets the clip rejected):
+- Describe ONLY what actually happens in this clip. Do not invent events, names or outcomes.
+- title: max 90 chars, curiosity-driven, does not spoil the payoff, ends with #loveisblind. Warm or neutral tone.
+- description: 2-line hook → blank line → a line that contains both "Love Is Blind" and "Netflix" → blank line → hashtags line that includes #loveisblind (max 5 hashtags)
+- tags: exactly 15, comma-separated
+- NEVER mock, insult or judge a cast member (no "crazy", "psycho", "delusional", "toxic", "red flag" about a person, etc.)
+- NEVER mention any other TV show, streaming service or platform — only Netflix.
+- Nothing sexual, political or racist.
+- pinned_comment: a question that invites opinions on the situation (not on anyone's looks or character)."""
+
+
+def generate_yt_metadata(story, episode_name, api_key, retries=3, campaign='friends'):
     import re
     api_key = api_key.strip()
     m = re.search(r'[Ss](\d+)[Ee](\d+)', episode_name)
     ep_str = f"S{int(m.group(1))}E{int(m.group(2))}" if m else episode_name
 
-    prompt = _YT_PROMPT.format(
+    template = _LIB_YT_PROMPT if campaign == 'loveisblind' else _YT_PROMPT
+    prompt = template.format(
         episode_str=ep_str,
         storyline=story['storyline_title'].replace('_', ' '),
         summary=story['storyline_summary'],
@@ -157,7 +234,8 @@ def generate_yt_metadata(story, episode_name, api_key, retries=3):
     return None
 
 
-def analyze_transcript(segments, api_key, used_segments=None, used_storylines=None, retries=5):
+def analyze_transcript(segments, api_key, used_segments=None, used_storylines=None, retries=5,
+                       campaign='friends'):
     api_key = api_key.strip()
 
     transcript_text = '\n'.join(
@@ -171,7 +249,8 @@ def analyze_transcript(segments, api_key, used_segments=None, used_storylines=No
     storylines_str = (
         '; '.join(used_storylines) if used_storylines else 'none'
     )
-    prompt = _PROMPT.format(
+    template = _LIB_PROMPT if campaign == 'loveisblind' else _PROMPT
+    prompt = template.format(
         transcript=transcript_text,
         used_segments=used_str,
         used_storylines=storylines_str,

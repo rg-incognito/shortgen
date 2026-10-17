@@ -8,10 +8,10 @@ _SILENCE_THRESH = 0.45  # seconds
 _SPEECH_PAD = 0.15      # seconds
 
 
-def _split_by_speech(clip_start, clip_end, all_words):
+def _split_by_speech(clip_start, clip_end, all_words, silence_thresh=_SILENCE_THRESH):
     """
     Split [clip_start, clip_end] into speech-only sub-intervals by removing
-    silent gaps longer than _SILENCE_THRESH.
+    silent gaps longer than silence_thresh.
 
     Returns a list of (start, end) tuples in episode time.
     Falls back to [(clip_start, clip_end)] if no words are found in range.
@@ -25,7 +25,7 @@ def _split_by_speech(clip_start, clip_end, all_words):
     burst_start = words[0]['start']
     burst_end   = words[0]['end']
     for w in words[1:]:
-        if w['start'] - burst_end > _SILENCE_THRESH:
+        if w['start'] - burst_end > silence_thresh:
             bursts.append((burst_start, burst_end))
             burst_start = w['start']
         burst_end = max(burst_end, w['end'])
@@ -49,8 +49,18 @@ def _split_by_speech(clip_start, clip_end, all_words):
     return merged
 
 
+def edited_duration(story, all_words, silence_thresh=_SILENCE_THRESH):
+    """Length of the finished short after silence trimming, without rendering anything."""
+    total = 0.0
+    for clip in story['clips']:
+        cs, ce = clip['start_seconds'], clip['end_seconds']
+        subs = _split_by_speech(cs, ce, all_words, silence_thresh) if all_words else [(cs, ce)]
+        total += sum(e - s for s, e in subs)
+    return total
+
+
 def create_story_short(video_path, story, output_dir, episode_name,
-                        pipeline=None, all_words=None):
+                        pipeline=None, all_words=None, silence_thresh=_SILENCE_THRESH):
     """
     Cuts every clip in a story arc, reframes each to 9:16, concatenates into
     one compiled video, then burns viral-style captions plus the persistent
@@ -76,7 +86,7 @@ def create_story_short(video_path, story, output_dir, episode_name,
             cs, ce = clip['start_seconds'], clip['end_seconds']
 
             if all_words:
-                sub_clips = _split_by_speech(cs, ce, all_words)
+                sub_clips = _split_by_speech(cs, ce, all_words, silence_thresh)
             else:
                 sub_clips = [(cs, ce)]
 
