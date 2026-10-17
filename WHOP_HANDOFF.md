@@ -7,8 +7,20 @@ How the Whop Content Rewards setup works, what runs on its own, and what needs a
 
 | Piece | Where | What it does |
 |---|---|---|
-| GitHub Actions schedule | `.github/workflows/generate_shorts.yml` | 00:00 UTC Love is Blind · 01:00 UTC Mark Manson · 02:00 UTC Love is Blind. Each run picks the next unused moment, renders a captioned 9:16 Short, uploads it to YouTube (goes public 10–15 min later), adds it to the playlist, logs it in the tracker sheet. |
-| Local fallback | Windows Task Scheduler: `shortGen fallback *` at 07:00 / 08:00 / 09:00 IST | `python run_local.py <campaign> --if-gh-missed HH:MM` — runs the same pipeline on this PC only if GitHub had no successful/running scheduled run for that slot (e.g. Actions minutes ran out). One local run at a time; logs in `logs/`. Needs the PC on and you logged into Windows. |
+| GitHub Actions schedule | `.github/workflows/generate_shorts.yml` | Each run renders ~90 min before its campaign's publish slot and schedules the YouTube upload to go public at the slot (see table below). It picks the next unused moment, renders a captioned 9:16 Short, adds it to the playlist, logs it in the tracker sheet. |
+| Local fallback | Windows Task Scheduler: `shortGen fallback *` (one per slot, at the publish time in IST) | `python run_local.py <campaign> --if-gh-missed HH:MM` — runs the same pipeline on this PC only if GitHub had no successful/running scheduled run for that slot (e.g. Actions minutes ran out); it then publishes as soon as possible. One local run at a time; logs in `logs/`. Needs the PC on and you logged into Windows. |
+
+### Publish slots (US Eastern — `publish_slots_et` in `src/campaigns.py`, follows daylight saving)
+
+| Campaign | Publish (ET) | UK time | Why | GitHub cron (UTC) | Local fallback (IST) |
+|---|---|---|---|---|---|
+| Mark Manson | 7:00 AM | 12:00 | morning-in-bed / commute self-improvement scroll; UK lunch | 09:30 | 16:30 |
+| Love is Blind | 12:30 PM | 17:30 | lunch-break scroll; UK commute home | 15:00 | 22:00 |
+| Unpacked | 4:00 PM | 21:00 | after school/work, younger male audience; UK evening | 18:30 | 01:30 |
+| Love & Justice | 6:00 PM | 23:00 | after-work relationship drama; UK in-bed scroll | 20:30 | 03:30 |
+| Love is Blind | 9:30 PM | (02:30) | US late-night in-bed scroll, core LIB audience | 00:00 | 07:00 |
+
+Submit to Whop within 30 min of each publish time.
 | Tracker sheet | Google Sheet `1d-GID8JCIrw89ygIKXfsyT9Fe0qtxxmsUaKORuDliOM`, tab `PostingTracker` | One row per Short. Column K = YouTube link, column M = Whop status. |
 
 Manual run: `gh workflow run "Generate Shorts" -f campaign=<name>` (or `python run_local.py <name>` on this PC).
@@ -53,7 +65,7 @@ To add one: profile in `src/campaigns.py` (length limits, `required_caption`, `c
 `src/analyzer.py` → `_PROMPTS`, footage as Drive file IDs or a GitHub release `footage-<name>`
 (download YouTube sources as **H.264** — AV1 breaks OpenCV on CI:
 `python -m yt_dlp -f "bv*[height<=720][vcodec^=avc1]+ba[ext=m4a]/b[height<=720][vcodec^=avc1]" --merge-output-format mp4 <url>`),
-test with one manual run, then give it a cron slot in the workflow (keep ~3 runs/day for Actions minutes).
+test with one manual run, then pick a `publish_slots_et` time for its audience and add a cron ~90 min earlier (plus a local fallback task).
 
 ## Active campaigns (as of 2026-10-18)
 
@@ -61,8 +73,8 @@ test with one manual run, then give it a cron slot in the workflow (keep ~3 runs
 |---|---|---|---|---|
 | `loveisblind` | Clip Farm — Love is Blind | $1.25/1K, min $1.25 | brand Drive files (S11 E01–E05) | 5 eps × 8 = 40 Shorts (~20 days at 2/day) |
 | `markmanson` | Clip Farm — Solved w/ Mark Manson | $1.25/1K, min $2 | release `footage-markmanson` (6 eps) | 36 Shorts |
-| `loveandjustice` | Clip Farm — HardScope Love & Justice Ep 3 | $1/1K, min $3 | release `footage-hardscope` | 6 Shorts (not scheduled yet) |
-| `unpacked` | Clip Farm — HardScope Unpacked Ep 1 / Ep 2 (separate campaigns) | $1/1K, min $3 | release `footage-hardscope` | 10 Shorts (not scheduled yet) |
+| `loveandjustice` | Clip Farm — HardScope Love & Justice Ep 3 | $1/1K, min $3 | release `footage-hardscope` | 6 Shorts |
+| `unpacked` | Clip Farm — HardScope Unpacked Ep 1 / Ep 2 (separate campaigns) | $1/1K, min $3 | release `footage-hardscope` | 10 Shorts |
 
 ## Decisions made
 - Posting to the existing "The One Where" channel (@theonewhereclips); Friends Shorts stopped on 2026-10-17.
@@ -85,6 +97,8 @@ test with one manual run, then give it a cron slot in the workflow (keep ~3 runs
 | cde3a83 | HardScope Love & Justice / Unpacked profiles, per-episode Whop URLs |
 | 43ca1c0 | Scheduled Friends Shorts stopped |
 | 0b8cb35 | `run_local.py`, `setup_local_env.py`, Windows caption fix |
+| 15cdc1b | Love is Blind: reject clips with looks insults / real people named |
+| 1c00104 | Niche publish slots in US Eastern; Unpacked + Love & Justice scheduled |
 
 GitHub releases holding footage: `footage-markmanson`, `footage-hardscope`.
 Local only (gitignored): `.env`, `yt_token.json`, `tokens.txt`, `campaign_scout.json`, `footage_hs/`, `logs/`.
