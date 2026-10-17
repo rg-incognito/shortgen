@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       campaign:
-        description: 'Campaign profile (src/campaigns.py): friends | loveisblind | markmanson'
+        description: 'Campaign profile (src/campaigns.py): friends | loveisblind | markmanson | loveandjustice | unpacked'
         required: false
         default: 'loveisblind'
       video_file_id:

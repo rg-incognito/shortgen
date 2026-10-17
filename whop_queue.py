@@ -68,7 +68,8 @@ def due(fresh=False):
             out.append({
                 'row': i, 'campaign': campaign, 'episode': episode, 'title': title,
                 'yt_url': yt_url, 'published_at': scheduled_at, 'age_min': round(age_min, 1),
-                'whop_campaign': CAMPAIGNS[campaign]['whop_campaign'],
+                'whop_campaign': CAMPAIGNS[campaign].get('whop_campaigns', {}).get(
+                    episode, CAMPAIGNS[campaign]['whop_campaign']),
             })
     print(json.dumps(out, indent=2, ensure_ascii=False))
 

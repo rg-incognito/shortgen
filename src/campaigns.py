@@ -103,6 +103,71 @@ CAMPAIGNS = {
             r'\btrump\b', r'\bbiden\b', r'\bharris\b', r'\bdemocrat', r'\brepublican',
         ],
     },
+
+    # Whop: Clip Farm — HardScope "Love & Justice" Ep 3 (Zach Justice relationship show)
+    # Brief: 7s+, caption #LOVEANDJUSTICE, tag @HardScopeTV on YouTube, Ep 3 footage
+    # only, never the full episode, no FaZe, no politics, nothing negative about
+    # HardScope, no explicit content. ~70% of budget is on YouTube Shorts.
+    'loveandjustice': {
+        'source':       'release',
+        'release_tag':  'footage-hardscope',
+        'files': [
+            ('lcc81gtNkfs', 'HS_LOVEJUSTICE_E03'),   # Zach Justice Exposes The Weirdest Relationship Of All Time
+        ],
+        'max_runs':        6,
+        'archive':         False,
+        'silence_thresh':  0.8,
+        'wide_fallback':   True,
+        'min_seconds':     16.0,
+        'max_seconds':     58.0,
+        'playlist':        'Love & Justice',
+        'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/3b59058d-81d1-489b-bf54-97375caa10ad',
+        'required_caption': ['#LOVEANDJUSTICE', '@HardScopeTV'],
+        'caption_footer':   'Full episode of Love & Justice on @HardScopeTV\n\n#LOVEANDJUSTICE #relationships #couples #dating',
+        'banned_patterns': [
+            r'\bfaze\b',
+            r'\btrump\b', r'\bbiden\b', r'\bharris\b', r'\bdemocrat', r'\brepublican', r'\belection\b',
+            r'\bsex\b', r'\bsexy\b', r'\bnsfw\b', r'\bnaked\b',
+            r'\bpsycho\b', r'\bcrazy\b', r'\binsane\b', r'\bidiot\b', r'\bstupid\b', r'\bdumb\b',
+            r'\bugly\b', r'\bloser\b', r'\btrash\b', r'\bclown\b', r'\bscam\b', r'\bfake\b',
+        ],
+        'transcript_banned': [r'\bfaze\b'],
+    },
+
+    # Whop: Clip Farm — HardScope "Unpacked" (MatCrackz collectibles show), one
+    # campaign per episode. Brief: 7s+, #unpacked in caption, tag @HardScopeTV,
+    # that episode's footage only, never the full episode, no FaZe, no politics,
+    # nothing negative about HardScope. ~70% of budget is on YouTube Shorts.
+    'unpacked': {
+        'source':       'release',
+        'release_tag':  'footage-hardscope',
+        'files': [
+            ('DSmfWU_0Gf0', 'HS_UNPACKED_E01'),   # Steve Aoki Hunts For The World's Rarest Trading Cards
+            ('h7XBn5JnZ3s', 'HS_UNPACKED_E02'),   # YourRAGE Spends $15,000 Opening Rare Trading Cards
+        ],
+        'max_runs':        5,
+        'archive':         False,
+        'silence_thresh':  0.8,
+        'wide_fallback':   True,
+        'min_seconds':     16.0,
+        'max_seconds':     58.0,
+        'playlist':        'Unpacked',
+        'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/c85645f1-b75f-49e2-91d5-988cf9b3fadb',
+        # Each episode is its own Whop campaign; submitting to the wrong one is a ban.
+        'whop_campaigns': {
+            'HS_UNPACKED_E01': 'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/c85645f1-b75f-49e2-91d5-988cf9b3fadb',
+            'HS_UNPACKED_E02': 'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/58795e60-259f-4f9d-932c-87cf1aac7c8d',
+        },
+        'required_caption': ['#unpacked', '@HardScopeTV'],
+        'caption_footer':   'Watch the full episode of Unpacked on @HardScopeTV\n\n#unpacked #tradingcards #collectibles #packopening',
+        'banned_patterns': [
+            r'\bfaze\b',
+            r'\btrump\b', r'\bbiden\b', r'\bharris\b', r'\bdemocrat', r'\brepublican', r'\belection\b',
+            r'\bsex\b', r'\bsexy\b', r'\bnsfw\b',
+            r'\bscam\b', r'\bfake\b', r'\brigged\b', r'\bidiot\b', r'\bstupid\b', r'\bloser\b',
+        ],
+        'transcript_banned': [r'\bfaze\b'],
+    },
 }
 
 

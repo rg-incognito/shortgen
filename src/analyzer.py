@@ -278,9 +278,138 @@ Rules (brand requirements — breaking them gets the clip rejected):
 - pinned_comment: a genuine question about the idea that invites discussion."""
 
 
+_HS_SCENE_RULES = """HARD RULES (the brand rejects clips that break these):
+- ONE continuous scene. 1-3 clips from that same scene, back-to-back, in chronological order.
+- Total duration 25-45 seconds (absolute limits 18-55 seconds). Hook in the first 2 seconds: start at (or right before) the wildest line or reaction, keep any setup short.
+- End on a finished line or a reaction — NEVER mid-word or mid-sentence. Extend end_seconds by 1-2s to catch the full line. It is fine to cut before the full resolution so people go watch the episode.
+- Real moments only: never pick a cut that changes what someone meant.
+- NEVER pick anything that mentions FaZe, anything political, sexual/explicit, or that makes HardScope, the host or a guest look bad (no humiliation, no "scam"/"rigged" angles).
+- Clips must NOT overlap each other or the previously used segments.
+
+Previously used moments from this episode (AVOID these themes): {used_storylines}
+
+Previously used segments (AVOID these timestamps): {used_segments}
+
+Transcript (format: [start_sec - end_sec] text):
+{transcript}
+"""
+
+_HS_FIELD_RULES = """
+Field rules:
+- storyline_title: snake_case, max 40 chars
+- series_tag: always "{tag}"
+- hook_text: 3-8 words, ALL CAPS, teases the moment without spoiling the payoff, accurate to what happens — no lying clickbait. Never mention FaZe or any other channel. Burned onto the video as a banner for the whole clip.
+- hook_emoji: 1-2 emoji that fit the moment or "" if none fit
+- score: 1-10 viral potential"""
+
+_LJ_PROMPT = """You are a short-form video editor clipping "Love & Justice", Zach Justice's relationship show on the HardScope YouTube channel, for an official brand-approved clipping campaign. Real couples bring one relationship issue to Zach, he hears both sides and delivers a verdict on who is at fault.
+
+Find the SINGLE best standalone moment in this episode for a vertical YouTube Short.
+
+WHAT WORKS (ranked):
+1. The verdict or a big reveal — Zach calling who is at fault, a partner admitting something, a twist in the story
+2. A heated or hilarious exchange between the couple, or Zach's sharpest reaction to what he hears
+3. A relatable relationship question with a clear answer
+
+""" + _HS_SCENE_RULES + """
+Return ONLY a valid JSON object — no markdown, no explanation:
+{{
+  "format": "standalone_scene",
+  "storyline_title": "zach_rules_who_is_wrong",
+  "storyline_summary": "After hearing both sides, Zach tells the couple exactly who is at fault",
+  "series_tag": "love_and_justice",
+  "hook_text": "ZACH DID NOT HOLD BACK",
+  "hook_emoji": "⚖️",
+  "clips": [
+    {{
+      "start_seconds": 812.0,
+      "end_seconds": 846.0,
+      "label": "scene",
+      "description": "Zach's verdict and the couple's reaction"
+    }}
+  ],
+  "score": 8
+}}
+""" + _HS_FIELD_RULES.replace('{tag}', 'love_and_justice')
+
+_LJ_YT_PROMPT = """You write YouTube Shorts metadata for an official clip of "Love & Justice", Zach Justice's relationship show on HardScope.
+
+Moment : {storyline}
+Summary: {summary}
+
+Return ONLY valid JSON, no markdown:
+{{
+  "title": "He thought he was right... until Zach heard her side ⚖️",
+  "description": "She told her side and the whole story flipped.\\nWho do you think was wrong?\\n\\nFull episode of Love & Justice on @HardScopeTV\\n\\n#LOVEANDJUSTICE #relationships #couples #dating",
+  "tags": "Love and Justice, Zach Justice, HardScope, relationship advice, couples, dating, relationships, who is wrong, relationship drama, couple argument, relationship show, dating advice, boyfriend, girlfriend, verdict",
+  "pinned_comment": "Who was actually wrong here? 👇"
+}}
+
+Rules (brand requirements — breaking any of these gets the clip rejected):
+- Describe ONLY what actually happens in this clip. Do not invent events, names or outcomes. No misleading or damaging titles.
+- title: max 90 chars, conversational, curiosity-driven, like a fan posting.
+- description: 1-2 short lines on what happens → blank line → a line containing "@HardScopeTV" → blank line → hashtags line that includes #LOVEANDJUSTICE (max 5 hashtags)
+- tags: exactly 15, comma-separated
+- NEVER mention FaZe, other channels, or anything political or sexual. Never insult the couple.
+- pinned_comment: a question that invites opinions on who was right."""
+
+_UNPACKED_PROMPT = """You are a short-form video editor clipping "Unpacked", MatCrackz's collectibles show on the HardScope YouTube channel, for an official brand-approved clipping campaign. Celebrity guests hunt down their most-wanted collectibles and memorabilia — rare trading cards, big pulls, huge prices.
+
+Find the SINGLE best standalone moment in this episode for a vertical YouTube Short.
+
+WHAT WORKS (ranked):
+1. A big pull or reveal — the moment a rare card or item appears and everyone reacts
+2. A jaw-dropping price or a high-stakes decision ("that's $60,000")
+3. A funny or hype exchange between MatCrackz and the celebrity guest
+
+""" + _HS_SCENE_RULES + """
+Return ONLY a valid JSON object — no markdown, no explanation:
+{{
+  "format": "standalone_scene",
+  "storyline_title": "sixty_thousand_dollar_pull",
+  "storyline_summary": "The guest opens the pack and pulls the card everyone was hoping for",
+  "series_tag": "unpacked",
+  "hook_text": "HE PULLED THE $60K CARD",
+  "hook_emoji": "🤯",
+  "clips": [
+    {{
+      "start_seconds": 812.0,
+      "end_seconds": 846.0,
+      "label": "scene",
+      "description": "The pull and the reaction"
+    }}
+  ],
+  "score": 8
+}}
+""" + _HS_FIELD_RULES.replace('{tag}', 'unpacked')
+
+_UNPACKED_YT_PROMPT = """You write YouTube Shorts metadata for an official clip of "Unpacked", MatCrackz's collectibles show on HardScope.
+
+Moment : {storyline}
+Summary: {summary}
+
+Return ONLY valid JSON, no markdown:
+{{
+  "title": "He did NOT expect to pull this card 🤯",
+  "description": "One pack and the whole room lost it.\\nWould you have kept it or sold it?\\n\\nWatch the full episode of Unpacked on @HardScopeTV\\n\\n#unpacked #tradingcards #collectibles #packopening",
+  "tags": "Unpacked, HardScope, MatCrackz, trading cards, pack opening, rare cards, collectibles, card pulls, sports cards, pokemon cards, memorabilia, big pull, card collecting, hobby, rare pull",
+  "pinned_comment": "Keep it or sell it? 👇"
+}}
+
+Rules (brand requirements — breaking any of these gets the clip rejected):
+- Describe ONLY what actually happens in this clip. Do not invent names, prices or outcomes. No misleading or damaging titles.
+- title: max 90 chars, conversational, like a fan posting.
+- description: 1-2 short lines on what happens → blank line → a line containing "@HardScopeTV" → blank line → hashtags line that includes #unpacked (max 5 hashtags)
+- tags: exactly 15, comma-separated
+- NEVER mention FaZe, other channels, or anything political or sexual. Nothing that frames the show as fake or a scam.
+- pinned_comment: a short question that invites opinions on the moment."""
+
+
 _PROMPTS = {
-    'loveisblind': (_LIB_PROMPT, _LIB_YT_PROMPT),
-    'markmanson':  (_SOLVED_PROMPT, _SOLVED_YT_PROMPT),
+    'loveisblind':    (_LIB_PROMPT, _LIB_YT_PROMPT),
+    'markmanson':     (_SOLVED_PROMPT, _SOLVED_YT_PROMPT),
+    'loveandjustice': (_LJ_PROMPT, _LJ_YT_PROMPT),
+    'unpacked':       (_UNPACKED_PROMPT, _UNPACKED_YT_PROMPT),
 }
 
 
