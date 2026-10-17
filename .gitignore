@@ -15,3 +15,5 @@ analytics_report.csv
 analytics_summary.txt
 *.mp4
 *.mkv
+logs/
+footage_hs/

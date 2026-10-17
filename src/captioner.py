@@ -304,9 +304,13 @@ def burn_captions(video_path, output_path, all_words, story_clips,
             with open(ass_file, 'w', encoding='utf-8') as f:
                 f.write(ass_content)
 
-            # Escape ':' (e.g. a Windows drive letter) so ffmpeg's filter-option
-            # parser doesn't mistake it for a key=value separator.
-            ass_safe = ass_file.replace('\\', '/').replace(':', '\\:')
+            # Run ffmpeg from the .ass file's folder and refer to it by name: a
+            # Windows drive letter ("C:") inside a filter graph breaks ffmpeg's
+            # option parser no matter how it is escaped.
+            ass_dir, ass_safe = os.path.split(ass_file)
+            video_path, output_path = os.path.abspath(video_path), os.path.abspath(output_path)
+            if hook_png:
+                hook_png = os.path.abspath(hook_png)
             enhance   = "unsharp=5:5:0.8:3:3:0,eq=contrast=1.05:saturation=1.1"
 
             if hook_png:
@@ -336,7 +340,7 @@ def burn_captions(video_path, output_path, all_words, story_clips,
                     '-c:a', 'aac', '-b:a', '128k',
                     output_path,
                 ]
-            subprocess.run(cmd, check=True, capture_output=True)
+            subprocess.run(cmd, check=True, capture_output=True, cwd=ass_dir)
         finally:
             try:
                 os.unlink(ass_file)
