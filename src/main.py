@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -243,11 +244,17 @@ def main():
             series_tag = story.get('series_tag', '')
             playlist_title = profile.get('playlist') or _SERIES_PLAYLIST.get(series_tag)
             if playlist_title:
-                try:
-                    add_to_playlist(yt_video_id, playlist_title)
-                    print(f"      Added to playlist: {playlist_title}")
-                except Exception as pe:
-                    print(f"      Playlist add skipped: {pe}")
+                # YouTube often returns a transient 409 SERVICE_UNAVAILABLE right after upload.
+                for attempt in (1, 2):
+                    try:
+                        add_to_playlist(yt_video_id, playlist_title)
+                        print(f"      Added to playlist: {playlist_title}")
+                        break
+                    except Exception as pe:
+                        if attempt == 2:
+                            print(f"      Playlist add skipped: {pe}")
+                        else:
+                            time.sleep(20)
 
         # Move the uploaded short to shorts/used/
         if drive_file_id:
