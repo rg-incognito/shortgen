@@ -54,6 +54,10 @@ CAMPAIGNS = {
             r'\bsexy\b', r'\bsex\b', r'\bnsfw\b', r'\bnaked\b',
             r'\bdemocrat', r'\brepublican', r'\btrump\b', r'\bbiden\b', r'\bharris\b',
         ],
+        # Cast rating people's looks reads as disrespectful in a clip, even when it's their own words.
+        'transcript_banned': [
+            r'\bugly\b', r'\bfat\b', r'\bretard', r'\bslut', r'\bwhore\b',
+        ],
     },
 
     # Whop: Clip Farm — "Solved w/ Mark Manson" (podcast)

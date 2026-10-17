@@ -141,6 +141,7 @@ HARD RULES (a clip that breaks any of these is rejected by the brand):
 - Total duration 25-45 seconds (absolute limits 18-55 seconds). It must feel complete on its own: a setup and a payoff, not a fragment.
 - The moment must have a clear story — no random footage, no "nothing happens" clips.
 - Never pick content that mocks or humiliates a cast member, anything sexual/explicit, violent, political, or racist.
+- Never pick a moment where someone rates or insults people's looks ("ugly", "fat", "hot girl with an ugly guy"…) or talks about real people outside the show (celebrities, comedians, exes by name).
 - Start at the natural start of the beat (mid-sentence is fine if that's how it plays). End on a finished line or a reaction — NEVER mid-word or mid-sentence. Extend end_seconds by 1-2s to catch the full line.
 - Clips must NOT overlap each other or the previously used segments.
 
