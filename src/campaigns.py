@@ -16,6 +16,8 @@ from zoneinfo import ZoneInfo
 _ET = ZoneInfo('America/New_York')
 _PROCESSING_MIN = 15      # YouTube needs a few minutes before a scheduled publish
 _LATE_GRACE_MIN = 90      # run finished a bit after its slot -> publish ASAP, not tomorrow
+# A late run publishes up to this long after its slot; the duplicate-slot guard must look that far back.
+SLOT_GUARD_MIN = _LATE_GRACE_MIN + _PROCESSING_MIN + 15
 
 CAMPAIGNS = {
     'friends': {

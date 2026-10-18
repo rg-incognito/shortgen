@@ -17,7 +17,7 @@ from analyzer import analyze_transcript, generate_yt_metadata
 from clipper import create_story_short, edited_duration
 from sheet_tracker import SheetTracker
 from campaigns import (get_campaign, find_banned, find_transcript_banned, enforce_caption,
-                       next_publish_time)
+                       next_publish_time, SLOT_GUARD_MIN)
 from footage import download_from_release, sponsor_segments
 
 VIDEOS_FOLDER_ID  = os.environ.get('VIDEOS_FOLDER_ID',  '1bIFaNpfBy1Bp9R14T22EV-hMsYYrLeTS')
@@ -116,7 +116,8 @@ def main():
     # GitHub cron runs can start hours late and the local fallback may also fire;
     # never put two Shorts of one campaign into the same publish slot.
     slot = next_publish_time(profile)
-    if slot and not video_file_id and tracker.slot_taken({ep for _, ep in profile.get('files', [])}, slot):
+    if slot and not video_file_id and tracker.slot_taken({ep for _, ep in profile.get('files', [])}, slot,
+                                                             window_min=SLOT_GUARD_MIN):
         print(f"{campaign}: a Short is already scheduled for the {slot} slot — nothing to do.")
         sys.exit(0)
 
