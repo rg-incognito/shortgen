@@ -7,6 +7,7 @@ on:
     # Eastern) and schedules the upload to go public exactly at the slot.
     - cron: '0 8 * * *'     # Mark Manson    -> 7:00 AM ET
     - cron: '30 13 * * *'   # Love is Blind  -> 12:30 PM ET
+    - cron: '0 15 * * *'    # YoungLA        -> 2:00 PM ET
     - cron: '0 17 * * *'    # Unpacked       -> 4:00 PM ET
     - cron: '0 19 * * *'    # Love & Justice -> 6:00 PM ET
     - cron: '30 22 * * *'   # Love is Blind  -> 9:30 PM ET
@@ -106,7 +107,7 @@ jobs:
           GH_TOKEN:                    ${{ github.token }}
           SPREADSHEET_ID:              '1d-GID8JCIrw89ygIKXfsyT9Fe0qtxxmsUaKORuDliOM'
           # Scheduled runs can't pass inputs, so the cron slot decides the campaign.
-          CAMPAIGN: ${{ github.event.inputs.campaign || (github.event.schedule == '0 8 * * *' && 'markmanson') || ((github.event.schedule == '30 13 * * *' || github.event.schedule == '30 22 * * *') && 'loveisblind') || (github.event.schedule == '0 17 * * *' && 'unpacked') || (github.event.schedule == '0 19 * * *' && 'loveandjustice') || 'loveisblind' }}
+          CAMPAIGN: ${{ github.event.inputs.campaign || (github.event.schedule == '0 8 * * *' && 'markmanson') || ((github.event.schedule == '30 13 * * *' || github.event.schedule == '30 22 * * *') && 'loveisblind') || (github.event.schedule == '0 15 * * *' && 'youngla') || (github.event.schedule == '0 17 * * *' && 'unpacked') || (github.event.schedule == '0 19 * * *' && 'loveandjustice') || 'loveisblind' }}
           VIDEO_FILE_ID:               ${{ github.event.inputs.video_file_id }}
           EPISODE_NAME:                ${{ github.event.inputs.episode_name }}
           WHISPER_MODEL:               ${{ github.event.inputs.whisper_model || 'medium' }}
