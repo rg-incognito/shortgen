@@ -12,13 +12,18 @@ How the Whop Content Rewards setup works, what runs on its own, and what needs a
 
 ### Publish slots (US Eastern — `publish_slots_et` in `src/campaigns.py`, follows daylight saving)
 
-| Campaign | Publish (ET) | UK time | Why | GitHub cron (UTC) | Local fallback (IST) |
+| Campaign | Publish (ET) | UK time | Why | GitHub cron (UTC, ~3h early) | Local fallback (IST) |
 |---|---|---|---|---|---|
-| Mark Manson | 7:00 AM | 12:00 | morning-in-bed / commute self-improvement scroll; UK lunch | 09:30 | 16:30 |
-| Love is Blind | 12:30 PM | 17:30 | lunch-break scroll; UK commute home | 15:00 | 22:00 |
-| Unpacked | 4:00 PM | 21:00 | after school/work, younger male audience; UK evening | 18:30 | 01:30 |
-| Love & Justice | 6:00 PM | 23:00 | after-work relationship drama; UK in-bed scroll | 20:30 | 03:30 |
-| Love is Blind | 9:30 PM | (02:30) | US late-night in-bed scroll, core LIB audience | 00:00 | 07:00 |
+| Mark Manson | 7:00 AM | 12:00 | morning-in-bed / commute self-improvement scroll; UK lunch | 08:00 | 15:40 |
+| Love is Blind | 12:30 PM | 17:30 | lunch-break scroll; UK commute home | 13:30 | 21:10 |
+| YoungLA | 2:00 PM | 19:00 | gym crowd; UK evening | 15:00 | 22:40 |
+| Unpacked | 4:00 PM | 21:00 | after school/work, younger male audience | 17:00 | 00:40 |
+| Love & Justice | 6:00 PM | 23:00 | after-work relationship drama; UK in-bed scroll | 19:00 | 02:40 |
+| Love is Blind | 9:30 PM | (02:30) | US late-night in-bed scroll | 22:30 | 06:10 |
+
+GitHub starts scheduled runs 1-2+ hours late, hence the early crons; the upload is still scheduled for the slot.
+If a campaign already has a Short in that slot (late cron + local fallback both fired) the second run exits.
+After a reboot: relaunch Claude Code (it runs the Whop auto-submit watcher) and stay signed in to Windows.
 
 Submit to Whop within 30 min of each publish time.
 | Tracker sheet | Google Sheet `1d-GID8JCIrw89ygIKXfsyT9Fe0qtxxmsUaKORuDliOM`, tab `PostingTracker` | One row per Short. Column K = YouTube link, column M = Whop status. |
@@ -75,6 +80,7 @@ test with one manual run, then pick a `publish_slots_et` time for its audience a
 | `markmanson` | Clip Farm — Solved w/ Mark Manson | $1.25/1K, min $2 | release `footage-markmanson` (6 eps) | 36 Shorts |
 | `loveandjustice` | Clip Farm — HardScope Love & Justice Ep 3 | $1/1K, min $3 | release `footage-hardscope` | 6 Shorts |
 | `unpacked` | Clip Farm — HardScope Unpacked Ep 1 / Ep 2 (separate campaigns) | $1/1K, min $3 | release `footage-hardscope` | 10 Shorts |
+| `youngla` | Clip Farm — YoungLA (caption must NOT mention the brand) | $1/1K, min $1 | release `footage-youngla` (YoungLA WORLD videos) | 12 Shorts |
 
 ## Decisions made
 - Posting to the existing "The One Where" channel (@theonewhereclips); Friends Shorts stopped on 2026-10-17.
