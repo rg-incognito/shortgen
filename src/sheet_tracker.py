@@ -117,6 +117,22 @@ class SheetTracker:
             body={'values': [row]},
         ).execute(num_retries=5)
 
+    def slot_taken(self, episodes, publish_at, window_min=45):
+        """True if a Short for one of these episodes is already scheduled within window_min of publish_at."""
+        target = datetime.datetime.strptime(publish_at, '%Y-%m-%dT%H:%M:%SZ')
+        rows = self._svc.spreadsheets().values().get(
+            spreadsheetId=self._sid, range=f'{_POSTING_SHEET}!A:J',
+        ).execute(num_retries=5).get('values', [])
+        for row in rows[1:]:
+            if len(row) >= 10 and row[0] in episodes and row[9]:
+                try:
+                    when = datetime.datetime.strptime(row[9], '%Y-%m-%dT%H:%M:%SZ')
+                except ValueError:
+                    continue
+                if abs((when - target).total_seconds()) <= window_min * 60:
+                    return True
+        return False
+
     def get_next_publish_slot(self):
         """Return a publish time 10-15 minutes from now (just enough buffer for YouTube to process the upload)."""
         now = datetime.datetime.utcnow()

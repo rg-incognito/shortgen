@@ -71,6 +71,14 @@ def _gh_covered(slot_hhmm):
     return False
 
 
+def _pid_alive(pid):
+    """A lock left by a run killed in a reboot must not block later runs."""
+    if not pid.isdigit():
+        return False
+    out = subprocess.run(['tasklist', '/FI', f'PID eq {pid}', '/NH'], capture_output=True, text=True)
+    return pid in out.stdout
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
@@ -83,10 +91,8 @@ def main():
 
     (ROOT / 'logs').mkdir(exist_ok=True)
     # This PC is slow; never run two pipelines at once.
-    if LOCK.exists():
-        age = datetime.datetime.now().timestamp() - LOCK.stat().st_mtime
-        if age < 4 * 3600:
-            sys.exit(f'another local run is in progress ({LOCK})')
+    if LOCK.exists() and _pid_alive(LOCK.read_text().strip()):
+        sys.exit(f'another local run is in progress ({LOCK})')
     LOCK.write_text(str(os.getpid()))
 
     env = _load_env()

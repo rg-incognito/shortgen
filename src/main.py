@@ -113,6 +113,13 @@ def main():
         except Exception as e:
             print(f'  Diarization pipeline unavailable: {e} — using face-only tracking')
 
+    # GitHub cron runs can start hours late and the local fallback may also fire;
+    # never put two Shorts of one campaign into the same publish slot.
+    slot = next_publish_time(profile)
+    if slot and not video_file_id and tracker.slot_taken({ep for _, ep in profile.get('files', [])}, slot):
+        print(f"{campaign}: a Short is already scheduled for the {slot} slot — nothing to do.")
+        sys.exit(0)
+
     # Auto-pick if no file ID provided
     if not video_file_id:
         if profile['source'] in ('drive_files', 'release'):
