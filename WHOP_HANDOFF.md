@@ -14,12 +14,14 @@ How the Whop Content Rewards setup works, what runs on its own, and what needs a
 
 | Campaign | Publish (ET) | UK time | Why | GitHub cron (UTC, ~3h early) | Local fallback (IST) |
 |---|---|---|---|---|---|
-| Mark Manson | 7:00 AM | 12:00 | morning-in-bed / commute self-improvement scroll; UK lunch | 08:00 | 15:40 |
 | Love is Blind | 12:30 PM | 17:30 | lunch-break scroll; UK commute home | 13:30 | 21:10 |
 | YoungLA | 2:00 PM | 19:00 | gym crowd; UK evening | 15:00 | 22:40 |
-| Unpacked | 4:00 PM | 21:00 | after school/work, younger male audience | 17:00 | 00:40 |
-| Love & Justice | 6:00 PM | 23:00 | after-work relationship drama; UK in-bed scroll | 19:00 | 02:40 |
 | Love is Blind | 9:30 PM | (02:30) | US late-night in-bed scroll | 22:30 | 06:10 |
+
+Only campaigns whose minimum payout is reached at ~1,000 views are scheduled (our Shorts mostly plateau
+around 1K): Love is Blind ($1.25 min at $1.25/1K) and YoungLA ($1 min at $1/1K). Mark Manson (1,600 views),
+Unpacked and Love & Justice (3,000 views) were unscheduled on 2026-10-19; their profiles and footage remain,
+and their local fallback tasks are disabled, not deleted.
 
 GitHub starts scheduled runs 1-2+ hours late, hence the early crons; the upload is still scheduled for the slot.
 If a campaign already has a Short in that slot (late cron + local fallback both fired) the second run exits.
