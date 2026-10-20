@@ -6,7 +6,6 @@ on:
     # before its campaign's publish slot (src/campaigns.py publish_slots_et, US
     # Eastern) and schedules the upload to go public exactly at the slot.
     - cron: '30 13 * * *'   # Love is Blind  -> 12:30 PM ET
-    - cron: '0 15 * * *'    # YoungLA        -> 2:00 PM ET
     - cron: '30 22 * * *'   # Love is Blind  -> 9:30 PM ET
   workflow_dispatch:
     inputs:
