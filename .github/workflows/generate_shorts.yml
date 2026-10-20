@@ -1,12 +1,10 @@
 name: Generate Shorts
 
 on:
-  schedule:
-    # GitHub often starts scheduled runs 1-2+ hours late, so each run starts ~3h
-    # before its campaign's publish slot (src/campaigns.py publish_slots_et, US
-    # Eastern) and schedules the upload to go public exactly at the slot.
-    - cron: '30 13 * * *'   # Love is Blind  -> 12:30 PM ET
-    - cron: '30 22 * * *'   # Love is Blind  -> 9:30 PM ET
+  # No campaign is scheduled right now (see WHOP_HANDOFF.md). To schedule one, add a
+  # `schedule:` block: GitHub often starts scheduled runs 1-2+ hours late, so each cron
+  # starts ~3h before its campaign's publish slot (src/campaigns.py publish_slots_et,
+  # US Eastern) and the upload is scheduled to go public exactly at the slot.
   workflow_dispatch:
     inputs:
       campaign:

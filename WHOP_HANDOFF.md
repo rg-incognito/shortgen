@@ -14,11 +14,11 @@ How the Whop Content Rewards setup works, what runs on its own, and what needs a
 
 | Campaign | Publish (ET) | UK time | Why | GitHub cron (UTC, ~3h early) | Local fallback (IST) |
 |---|---|---|---|---|---|
-| Love is Blind | 12:30 PM | 17:30 | lunch-break scroll; UK commute home | 13:30 | 21:10 |
-| Love is Blind | 9:30 PM | (02:30) | US late-night in-bed scroll | 22:30 | 06:10 |
+| (none scheduled) | | | | | |
 
 Only campaigns whose minimum payout is reached at ~1,000 views are scheduled (our Shorts mostly plateau
-around 1K): Love is Blind ($1.25 min at $1.25/1K). YoungLA ($1 min) was unscheduled on 2026-10-20 because its
+around 1K). Love is Blind (12:30 PM / 9:30 PM ET) was unscheduled on 2026-10-20: the campaign stopped
+accepting YouTube (TikTok and Instagram only; Whop rejects YouTube links). YoungLA ($1 min) was unscheduled on 2026-10-20 because its
 YouTube budget split ($2,000) is fully paid out. Mark Manson (1,600 views),
 Unpacked and Love & Justice (3,000 views) were unscheduled on 2026-10-19; their profiles and footage remain,
 and their local fallback tasks are disabled, not deleted.
