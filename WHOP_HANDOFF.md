@@ -23,6 +23,12 @@ YouTube budget split ($2,000) is fully paid out. Mark Manson (1,600 views),
 Unpacked and Love & Justice (3,000 views) were unscheduled on 2026-10-19; their profiles and footage remain,
 and their local fallback tasks are disabled, not deleted.
 
+Jacob & Co x Kylie Jenner Fantasy Bra (Clip Farm, `jacobco`): runway/craft footage with no speech, so
+`jacobco_edits.py` cuts three fixed edits (each with one of the brief's exact on-screen headlines) from the
+brand's Dropbox footage; they were uploaded directly for 2026-10-20 23:00, 10-21 20:00 and 10-22 20:00 UTC.
+Captions start with @JacobCoofficial and write out Kylie Jenner / Victoria's Secret (never @ them).
+Submissions close Fri 2026-10-23 11:59 PM ET; no demographics ticket (stats come from the linked account).
+
 GitHub starts scheduled runs 1-2+ hours late, hence the early crons; the upload is still scheduled for the slot.
 If a campaign already has a Short in that slot (late cron + local fallback both fired) the second run exits.
 After a reboot: relaunch Claude Code (it runs the Whop auto-submit watcher) and stay signed in to Windows.

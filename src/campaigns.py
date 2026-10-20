@@ -226,6 +226,19 @@ CAMPAIGNS = {
             r'\bfuck', r'motherf', r'\bbitch', r'\bcunt\b', r'\bnigg', r'\bfag', r'\bretard',
         ],
     },
+    # Runway/craft footage with no speech, so these are hand-cut by scripts/jacobco_edits.py and
+    # uploaded directly; the profile only maps their episode names for whop_queue.
+    # Submissions close Fri 2026-10-23 11:59 PM ET. No demographics ticket (stats come from Content Rewards).
+    'jacobco': {
+        'source':        'manual',
+        'files': [
+            ('', 'JACOBCO_runway'),
+            ('', 'JACOBCO_reveal'),
+            ('', 'JACOBCO_story'),
+        ],
+        'playlist':      'Fashion Moments',
+        'whop_campaign': 'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/368755c4-c529-4d4a-97ae-2fcb242cdcfc',
+    },
 }
 
 
