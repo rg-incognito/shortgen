@@ -66,7 +66,9 @@ def _split_by_speech(clip_start, clip_end, all_words, silence_thresh=_SILENCE_TH
     end = min(max(clip_end, last_end + tail), last_end + _MAX_HOLD)
     if following:
         end = min(end, max(words[-1]['end'] + 0.05, following[0] - 0.05))
-    start = max(0.0, words[0]['start'] - _LEAD_PAD)
+    # Never before the requested start: upstream snaps it to a sentence start,
+    # and earlier would reach into the previous word.
+    start = max(clip_start, words[0]['start'] - _LEAD_PAD)
 
     # Cut points inside long pauses: (end of kept part, start of next part)
     parts = [[start, None]]
@@ -241,18 +243,13 @@ def _build_audio(video_path, segments, out_wav):
             f"afade=t=out:st={d - fade:.6f}:d={fade:.3f}[a{k}]")
         labels.append(f"[a{k}]")
     filter_complex = ";".join(chains) + f";{''.join(labels)}concat=n={len(segments)}:v=0:a=1[aout]"
-    script = tempfile.mktemp(suffix='.txt')
-    try:
-        with open(script, 'w', encoding='utf-8') as f:
-            f.write(filter_complex)
-        subprocess.run(['ffmpeg', '-y', *inputs, '-filter_complex_script', script,
-                        '-map', '[aout]', '-c:a', 'pcm_s16le', out_wav],
-                       check=True, capture_output=True)
-    finally:
-        try:
-            os.unlink(script)
-        except OSError:
-            pass
+    # Passed inline: -filter_complex_script is deprecated in ffmpeg 8 and its
+    # replacement (-/filter_complex) does not exist before ffmpeg 7. Inline
+    # works on every version; ~200 chars per segment stays far below
+    # command-line limits even for 40-part podcast clips.
+    subprocess.run(['ffmpeg', '-y', *inputs, '-filter_complex', filter_complex,
+                    '-map', '[aout]', '-c:a', 'pcm_s16le', out_wav],
+                   check=True, capture_output=True)
 
 
 def _merge_clips(clip_paths, output_path, audio_path=None):

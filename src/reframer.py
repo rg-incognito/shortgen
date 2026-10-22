@@ -66,6 +66,7 @@ _FLASH_FRAMES = 8
 # Stacked split (wide_fallback profiles): two faces each at least this large
 # relative to the bigger one, too far apart to share one crop.
 _SPLIT_MIN_REL = 0.55
+_SPLIT_MIN_CROP = 0.35   # split panel crop height, min fraction of the frame
 
 # MediaPipe Face Mesh landmark indices
 _NOSE_TIP  = 1
@@ -121,7 +122,7 @@ def _speech_frames(pipeline, wav_path, src_fps) -> set:
     return frames
 
 
-def _sample_faces(video_path, start_f, total_frames, src_fps):
+def _sample_faces(video_path, start_f, total_frames, src_fps, tiled=False):
     """
     Reads every frame of the clip once.
 
@@ -156,7 +157,7 @@ def _sample_faces(video_path, start_f, total_frames, src_fps):
             last_sample = fi
             rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             faces = _detect(landmarker, rgb)
-            if not faces:
+            if not faces and tiled:
                 faces = _detect_tiled(landmarker, rgb)
             data[fi] = faces
     finally:
@@ -393,7 +394,8 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
 
     # --- Face sampling + cut detection ---
     print('    Detecting faces, lip movement and camera cuts...')
-    frame_data, cuts = _sample_faces(video_path, start_f, total_frames, src_fps)
+    frame_data, cuts = _sample_faces(video_path, start_f, total_frames, src_fps,
+                                     tiled=wide_fallback)
 
     # --- Per-shot layout + crop path ---
     plan = [None] * total_frames   # per frame: ('crop', cx, cy) | ('split', l, r) | ('wide',)
@@ -426,7 +428,8 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
         '-r', rate,
         '-i', 'pipe:0',
         '-an',
-        '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-pix_fmt', 'yuv420p',
+        # intermediate: re-encoded in the caption pass, so a faster preset
+        '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p',
         output_path,
     ]
     proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -464,7 +467,9 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
         elif p[0] == 'split':
             panels = []
             for face in (p[1], p[2]):
-                ch = min(src_h, face['h'] * src_h * 2.6) / z
+                # floor at 35% of the frame height: tiny (tiled) faces would
+                # otherwise be upscaled ~6x into a soft, blocky panel
+                ch = min(src_h, max(face['h'] * 2.6, _SPLIT_MIN_CROP) * src_h) / z
                 cw = ch * _OUT_W / panel_h
                 if cw > src_w:
                     cw, ch = float(src_w), src_w * panel_h / _OUT_W
