@@ -65,7 +65,7 @@ CAMPAIGNS = {
         'title_names':     ['Love Is Blind'],
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/382b0008-cecb-4b86-89a1-e5c8ef074ca7',
         'required_caption': ['Love Is Blind', 'Netflix', '#loveisblind'],
-        'caption_footer':   'Watch Love Is Blind on Netflix.\n\n#LoveIsBlind #LoveIsBlindNetflix #Netflix',
+        'caption_footer':   'Watch Love Is Blind on Netflix.\n\n#loveisblind #LoveIsBlindNetflix #Netflix',
         # Other streaming apps / shows must not be named; mocking the cast is grounds for rejection.
         'banned_patterns': [
             r'\bhulu\b', r'\bprime video\b', r'\bamazon\b', r'\bhbo\b',
@@ -287,17 +287,25 @@ def window_publish_time(iso):
     return start.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
-def next_publish_time(profile, now=None):
+def publish_plan(profile, now=None, slot=None):
     """
-    Next publishAt (UTC ISO 'Z') for the profile's niche slots, or None if the
-    profile has none (publish right away). A run that finishes shortly after a
-    slot publishes as soon as possible rather than waiting a whole day, but only
-    while that is still inside the US-evening window; otherwise it takes the
-    next slot.
+    (publishAt, slot) as UTC ISO 'Z' strings, or (None, None) if the profile has
+    no slots (publish right away). publishAt is the next slot, or "as soon as
+    possible" for a run that finishes shortly after a slot, but only while that
+    is still inside the US-evening window; `slot` is the nominal slot it serves.
+
+    `slot` ('HH:MM' ET, e.g. from the PUBLISH_SLOT env var) pins a run to one of
+    the profile's slots, so a campaign with two daily slots has one cron per
+    slot instead of both crons landing on whichever slot comes next.
     """
     slots = profile.get('publish_slots_et')
     if not slots:
-        return None
+        return None, None
+    if slot:
+        slot = slot.strip()
+        if slot not in slots:
+            raise ValueError(f"PUBLISH_SLOT {slot} is not one of this campaign's slots {slots}")
+        slots = [slot]
     now = now or datetime.datetime.now(datetime.timezone.utc)
     earliest = now + datetime.timedelta(minutes=_PROCESSING_MIN)
     today = now.astimezone(_ET).date()
@@ -310,13 +318,19 @@ def next_publish_time(profile, now=None):
                  .astimezone(datetime.timezone.utc))
             if in_publish_window(t):
                 times.append(t)
-    if in_publish_window(earliest) and any(
-            earliest - datetime.timedelta(minutes=_LATE_GRACE_MIN + _PROCESSING_MIN) < t < earliest
-            for t in times):
-        pick = earliest
+    late = [t for t in times
+            if earliest - datetime.timedelta(minutes=_LATE_GRACE_MIN + _PROCESSING_MIN) < t < earliest]
+    if in_publish_window(earliest) and late:
+        pick, nominal = earliest, max(late)
     else:
-        pick = min(t for t in times if t >= earliest)
-    return pick.strftime('%Y-%m-%dT%H:%M:%SZ')
+        pick = nominal = min(t for t in times if t >= earliest)
+    fmt = '%Y-%m-%dT%H:%M:%SZ'
+    return pick.strftime(fmt), nominal.strftime(fmt)
+
+
+def next_publish_time(profile, now=None, slot=None):
+    """Next publishAt (UTC ISO 'Z') for the profile's slots, or None (see publish_plan)."""
+    return publish_plan(profile, now, slot)[0]
 
 
 def get_campaign(name):
@@ -324,6 +338,14 @@ def get_campaign(name):
     if name not in CAMPAIGNS:
         raise ValueError(f"Unknown CAMPAIGN '{name}' — choose from: {', '.join(CAMPAIGNS)}")
     return name, CAMPAIGNS[name]
+
+
+def episode_campaign(episode_name):
+    """Campaign an episode belongs to: listed in a profile's files, else the Friends folder."""
+    for name, prof in CAMPAIGNS.items():
+        if any(ep == episode_name for _, ep in prof.get('files', [])):
+            return name
+    return 'friends'
 
 
 def find_banned(text, profile):
@@ -419,11 +441,27 @@ def tidy_title(title):
     return re.sub(r'\s{2,}', ' ', title).strip()
 
 
-def title_problems(title, profile, prior_titles=(), payoff_line=''):
+def _title_head(title, profile, n=4):
+    """First n words after the leading show/person name ("Mark Manson's", "Love Is Blind:")."""
+    norm = norm_title(title)
+    for name in sorted(profile.get('title_names') or [], key=len, reverse=True):
+        nn = norm_title(name)
+        if nn and norm.startswith(nn):
+            norm = re.sub(r"^'s\b", '', norm[len(nn):]).strip()
+            break
+    words = norm.split()
+    if words and words[0] in ('on', 'and', 'with', 'vs'):
+        words = words[1:]
+    return words[:n]
+
+
+def title_problems(title, profile, prior_titles=(), payoff_line='', campaign_titles=()):
     """
     (hard, soft) problems with a title. Hard ones must be fixed before upload:
-    "Wait…"-style openers, reuse of an earlier title (or its first 4 words) and
-    spoiling the payoff. Soft ones are preferences the LLM should meet.
+    "Wait…"-style openers, an exact reuse of any earlier title and spoiling the
+    payoff. Soft ones are preferences the LLM should meet, including not
+    reusing the opening words (after the leading name) of this campaign's
+    recent titles.
     """
     hard, soft = [], []
     norm = norm_title(title)
@@ -431,13 +469,12 @@ def title_problems(title, profile, prior_titles=(), payoff_line=''):
         hard.append('banned opener')
     if re.search(r'really just say that', norm):
         hard.append('templated "really just say that" title')
-    priors = [norm_title(t) for t in prior_titles if t]
-    if norm in priors:
+    if norm in {norm_title(t) for t in prior_titles if t}:
         hard.append('exact title already used')
     else:
-        head = norm.split()[:4]
-        if len(head) == 4 and any(p.split()[:4] == head for p in priors[-50:]):
-            hard.append('same opening words as a recent title')
+        head = _title_head(title, profile)
+        if len(head) == 4 and any(_title_head(t, profile) == head for t in list(campaign_titles)[-50:] if t):
+            soft.append('same opening words as a recent title')
     spoils = spoiler_hits(title, payoff_line, profile)
     if len(spoils) >= 2:
         hard.append(f'gives away the payoff {spoils}')
@@ -451,24 +488,41 @@ def title_problems(title, profile, prior_titles=(), payoff_line=''):
 
 def clean_hashtags(yt_meta, profile):
     """
-    Keep 3-5 specific hashtags on one final description line: required ones
-    first, broad ones (#viral, #funnymoments...) dropped. Also drops generic tags.
+    Keep 3-5 specific hashtags: hashtags that spell a required caption term
+    (#loveisblind, #Netflix for "Netflix") are always kept, broad ones
+    (#viral, #funnymoments...) are dropped. Hashtag-only lines are merged into
+    one final line; a hashtag inside a sentence stays if kept, else becomes a
+    plain word so the sentence still reads. Re-checks the required caption
+    afterwards and drops generic tags.
     """
     desc = yt_meta.get('description', '') or ''
+    required = {re.sub(r'[^a-z0-9]', '', r.lower()) for r in profile.get('required_caption', [])}
     found = re.findall(r'#\w+', desc)
-    required = [r for r in profile.get('required_caption', []) if r.startswith('#')]
+    must = [t for t in found if t[1:].lower() in required]
     keep, seen = [], set()
-    for tag in [t for t in found if t.lower() in {r.lower() for r in required}] + found:
+    for tag in must + found:
         low = tag.lower()
         if low in seen or low[1:] in BROAD_HASHTAGS:
             continue
+        if tag not in must and len(keep) >= MAX_HASHTAGS:   # required ones come first and always stay
+            continue
         seen.add(low)
         keep.append(tag)
-    keep = keep[:MAX_HASHTAGS]
-    body = re.sub(r'[ \t]*#\w+', '', desc)
-    body = re.sub(r'[ \t]+\n', '\n', body)
-    body = re.sub(r'\n{3,}', '\n\n', body).strip()
-    yt_meta['description'] = f"{body}\n\n{' '.join(keep)}" if keep else body
+    kept = {k.lower() for k in keep}
+
+    lines, inline = [], set()
+    for line in desc.splitlines():
+        if line.strip() and not re.sub(r'#\w+', '', line).strip():
+            continue                                   # hashtag-only line: rebuilt below
+        def plain(m):
+            if m.group(0).lower() in kept:
+                inline.add(m.group(0).lower())
+                return m.group(0)
+            return m.group(0)[1:]
+        lines.append(re.sub(r'#\w+', plain, line).rstrip())
+    body = re.sub(r'\n{3,}', '\n\n', '\n'.join(lines)).strip()
+    tail = ' '.join(k for k in keep if k.lower() not in inline)
+    yt_meta['description'] = f"{body}\n\n{tail}" if tail else body
     tags = [t.strip() for t in str(yt_meta.get('tags', '')).split(',') if t.strip()]
     yt_meta['tags'] = ', '.join(t for t in tags if t.lower() not in _BROAD_TAGS)
-    return yt_meta
+    return enforce_caption(yt_meta, profile)

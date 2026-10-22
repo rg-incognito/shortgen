@@ -17,9 +17,9 @@ from transcriber import transcribe_video
 from analyzer import (analyze_candidates, generate_yt_metadata, build_sentences, build_candidate,
                       hook_problems, overlap_problems, rank_score)
 from clipper import create_story_short, edited_duration
-from sheet_tracker import SheetTracker
+from sheet_tracker import SheetTracker, SKIP_PREFIX
 from campaigns import (get_campaign, find_banned, find_transcript_banned, enforce_caption,
-                       next_publish_time, window_publish_time, SLOT_GUARD_MIN,
+                       next_publish_time, publish_plan, window_publish_time, episode_campaign, SLOT_GUARD_MIN,
                        spoiler_hits, tidy_title, title_problems, clean_hashtags)
 from footage import download_from_release, sponsor_segments
 
@@ -28,7 +28,9 @@ SHORTS_FOLDER_ID  = os.environ.get('SHORTS_FOLDER_ID',  '1kzFXWZQu8QQVtZKeAVvSgH
 ARCHIVE_FOLDER_ID = os.environ.get('ARCHIVE_FOLDER_ID', '1nHZCaWO_KvkV52TekkF8ecC5JtIlXqJj')
 # A run whose best moment ranks below this uploads nothing: a weak Short stalls
 # at the ~1K seed and uses up a slot (and a Whop submission) for nothing.
-MIN_SCORE = float(os.environ.get('MIN_SCORE', '7'))
+MIN_SCORE = float(os.environ.get('MIN_SCORE') or '7')
+# This many score-gate skips in a row for one campaign fails the job, so the email fires.
+MAX_CONSECUTIVE_SKIPS = 3
 
 
 class WeakMomentSkip(Exception):
@@ -123,27 +125,35 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
             best_weak = passing[0]
 
     if best_weak:
-        raise WeakMomentSkip(f"best usable moment '{best_weak['storyline_title']}' scored "
+        err = WeakMomentSkip(f"best usable moment '{best_weak['storyline_title']}' scored "
                              f"{best_weak['score']:.1f} < {min_score:g}")
+        # Every segment the LLM offered: logged as used so the next run moves on.
+        err.segments = [seg for seg in avoid if seg not in used_segments]
+        err.score = best_weak['score']
+        raise err
     raise RuntimeError(f"No moment met the {campaign} campaign rules after {attempts} attempts")
 
 
 def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior_titles=(), attempts=4):
     """
     YouTube metadata that satisfies the campaign's caption rules and the title
-    rules (no reused or "Wait…" titles, no spoilers; ideally under 60 chars and
-    leading with a real name), or None if Gemini gives nothing.
+    rules (no reused or "Wait…" titles, no spoilers; ideally under 60 chars,
+    leading with a real name and not opening like this campaign's recent
+    titles), or None if Gemini gives nothing. prior_titles: (episode, title).
     """
+    all_titles = [t for _, t in prior_titles]
+    campaign_titles = [t for ep, t in prior_titles if episode_campaign(ep) == campaign]
     fallback = None
     for attempt in range(1, attempts + 1):
         yt_meta = generate_yt_metadata(story, episode_name, gemini_api_key, campaign=campaign,
                                        title_names=profile.get('title_names'),
-                                       recent_titles=list(prior_titles)[-30:])
+                                       recent_titles=campaign_titles[-30:])
         if not yt_meta:
             break
         yt_meta['title'] = tidy_title(str(yt_meta.get('title', '')))
         text = ' '.join(str(yt_meta.get(k, '')) for k in ('title', 'description', 'tags', 'pinned_comment'))
-        hard, soft = title_problems(yt_meta['title'], profile, prior_titles, story.get('payoff_line', ''))
+        hard, soft = title_problems(yt_meta['title'], profile, all_titles, story.get('payoff_line', ''),
+                                    campaign_titles)
         banned = find_banned(text, profile)
         if banned:
             hard.append(f"banned words {banned}")
@@ -158,6 +168,29 @@ def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior
     if not yt_meta:
         return None
     raise RuntimeError(f"Could not generate {campaign} metadata that passes the title rules")
+
+
+def _record_skip(tracker, campaign, episode_name, run, skip):
+    """
+    Log a score-gate skip as a run whose offered segments are used, so the
+    next run moves on to new moments (or the next episode) instead of being
+    offered the same weak ones forever. Exits non-zero after
+    MAX_CONSECUTIVE_SKIPS skips in a row for this campaign so it gets noticed.
+    """
+    print(f"\n{'=' * 70}\nSKIPPED — NOTHING UPLOADED for {episode_name}: {skip}\n{'=' * 70}")
+    tracker.log_clips(episode_name, run, [
+        {'title': f"{SKIP_PREFIX}p{i + 1}", 'start_seconds': s, 'end_seconds': e,
+         'score': skip.score, 'reason': f"score gate: {skip}"}
+        for i, (s, e) in enumerate(skip.segments or [(0.0, 0.0)])
+    ])
+    skips = tracker.consecutive_skips(lambda ep: episode_campaign(ep) == campaign)
+    print(f"      Logged run {run} as skipped ({len(skip.segments)} segment(s) marked used); "
+          f"{skips} skip(s) in a row for {campaign}")
+    if skips >= MAX_CONSECUTIVE_SKIPS:
+        print(f"::error title=Campaign stalled::{campaign}: {skips} runs in a row skipped by the score gate "
+              f"(MIN_SCORE {MIN_SCORE:g}). Check the footage or lower MIN_SCORE.")
+        sys.exit(1)
+    print(f"::warning title=Run skipped::{campaign} {episode_name}: {skip}")
 
 
 def main():
@@ -185,11 +218,21 @@ def main():
         except Exception as e:
             print(f'  Diarization pipeline unavailable: {e} — using face-only tracking')
 
+    # A campaign with several daily slots gets one cron per slot, each passing
+    # PUBLISH_SLOT=HH:MM (ET); without it the run serves whichever slot is next.
+    pinned_slot = os.environ.get('PUBLISH_SLOT', '').strip() or None
+    if pinned_slot:
+        print(f"Publish slot pinned to {pinned_slot} ET")
+
     # GitHub cron runs can start hours late and the local fallback may also fire;
     # never put two Shorts of one campaign into the same publish slot.
-    slot = next_publish_time(profile)
+    slot, nominal = publish_plan(profile, slot=pinned_slot)
+    # Pinned: only Shorts for this slot (scheduled at or after it) count, not
+    # an earlier slot's late publish.
+    not_before = nominal if pinned_slot else None
     if slot and not video_file_id and tracker.slot_taken({ep for _, ep in profile.get('files', [])}, slot,
-                                                             window_min=SLOT_GUARD_MIN):
+                                                             window_min=SLOT_GUARD_MIN,
+                                                             not_before=not_before):
         print(f"{campaign}: a Short is already scheduled for the {slot} slot — nothing to do.")
         sys.exit(0)
 
@@ -263,9 +306,7 @@ def main():
             story = _pick_story(segments, all_words, gemini_api_key, avoid_segments, used_storylines,
                                 campaign, profile, src_dur)
         except WeakMomentSkip as e:
-            # Exit cleanly (no failed-run email) but make the skip impossible to miss in the log.
-            print(f"\n{'=' * 70}\nSKIPPED — NOTHING UPLOADED for {episode_name}: {e}\n{'=' * 70}")
-            print(f"::warning title=Run skipped::{campaign} {episode_name}: {e}")
+            _record_skip(tracker, campaign, episode_name, current_run, e)
             return
         total_sec = story.get('_edited_seconds', story.get('_total_seconds', 0))
         print(f"      Story: [{story['score']}/10] ({story.get('format', 'story_recap')}) {story['storyline_title']}  (~{total_sec:.0f}s total)")
@@ -328,7 +369,8 @@ def main():
             tracker.log_posting_metadata(episode_name, current_run, story, yt_meta)
             from youtube_client import upload_scheduled, add_to_playlist
             # Profiles without slots publish ASAP, but still only in the US-evening window.
-            publish_at = next_publish_time(profile) or window_publish_time(tracker.get_next_publish_slot())
+            publish_at = (next_publish_time(profile, slot=pinned_slot)
+                          or window_publish_time(tracker.get_next_publish_slot()))
             print(f"[5b] Scheduling on YouTube → {publish_at}...")
             yt_video_id = upload_scheduled(
                 short_path,

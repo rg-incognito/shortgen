@@ -21,6 +21,8 @@ _POSTING_HEADERS  = [
 _PUBLISH_BUFFER_MIN = (10, 15)
 # Column N of PostingTracker (M is whop_queue's whop_status): sha1 of the uploaded file.
 _HASH_COL = 'N'
+# Clip-log titles of a run the score gate skipped (its segments count as used).
+SKIP_PREFIX = 'SKIPPED_'
 
 
 def episode_key(name):
@@ -141,9 +143,14 @@ class SheetTracker:
             body={'values': [row]},
         ).execute(num_retries=5)
 
-    def slot_taken(self, episodes, publish_at, window_min=45):
-        """True if a Short for one of these episodes is already scheduled within window_min of publish_at."""
+    def slot_taken(self, episodes, publish_at, window_min=45, not_before=None):
+        """
+        True if a Short for one of these episodes is already scheduled within
+        window_min of publish_at. Shorts scheduled before not_before (an earlier
+        slot of the same day, when a run is pinned to one slot) don't count.
+        """
         target = datetime.datetime.strptime(publish_at, '%Y-%m-%dT%H:%M:%SZ')
+        floor = datetime.datetime.strptime(not_before, '%Y-%m-%dT%H:%M:%SZ') if not_before else None
         rows = self._svc.spreadsheets().values().get(
             spreadsheetId=self._sid, range=f'{_POSTING_SHEET}!A:J',
         ).execute(num_retries=5).get('values', [])
@@ -152,6 +159,8 @@ class SheetTracker:
                 try:
                     when = datetime.datetime.strptime(row[9], '%Y-%m-%dT%H:%M:%SZ')
                 except ValueError:
+                    continue
+                if floor and when < floor:
                     continue
                 if abs((when - target).total_seconds()) <= window_min * 60:
                     return True
@@ -164,8 +173,26 @@ class SheetTracker:
         ).execute(num_retries=5).get('values', [])[1:]
 
     def get_prior_titles(self):
-        """Every YouTube title logged so far, oldest first."""
-        return [r[4] for r in self._posting_rows() if len(r) > 4 and r[4]]
+        """(episode_name, title) for every YouTube title logged so far, oldest first."""
+        return [(r[0], r[4]) for r in self._posting_rows() if len(r) > 4 and r[4]]
+
+    def consecutive_skips(self, belongs):
+        """
+        How many of the latest runs (of episodes where belongs(episode) is true)
+        in a row were score-gate skips, i.e. every clip-log row of the run is
+        titled SKIPPED_*.
+        """
+        runs = {}   # (episode, run) in the order the runs were logged
+        for r in self._rows():
+            if len(r) >= 3 and belongs(r[0]):
+                key = (r[0], r[1])
+                runs[key] = runs.get(key, True) and r[2].startswith(SKIP_PREFIX)
+        count = 0
+        for skipped in reversed(list(runs.values())):
+            if not skipped:
+                break
+            count += 1
+        return count
 
     def find_prior_upload(self, title, file_sha1=None):
         """
@@ -196,7 +223,7 @@ class SheetTracker:
         self._ensure_posting_sheet()
         res = self._svc.spreadsheets().values().get(
             spreadsheetId=self._sid,
-            range=f'{_POSTING_SHEET}!A:L',
+            range=f'{_POSTING_SHEET}!A:N',   # through N so the file_sha1 header is seen
         ).execute(num_retries=5)
         rows = res.get('values', [])
         for i, row in enumerate(rows):

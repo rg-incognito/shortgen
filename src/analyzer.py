@@ -162,7 +162,7 @@ def build_candidate(raw, sents, words):
     Turn one LLM candidate into a story with exact cut times. Returns
     (story, problems); story is None when its sentence numbers are unusable.
     """
-    clips, ranges = [], []
+    clips, ranges, asked = [], [], []
     for c in raw.get('clips') or []:
         try:
             if 'start_sentence' in c:
@@ -174,6 +174,7 @@ def build_candidate(raw, sents, words):
             return None, ['clip has no usable sentence numbers']
         if not 0 <= a <= b < len(sents):
             return None, [f'sentence range S{a}-S{b} is reversed or out of range']
+        asked.append(a)
         snapped = snap_range(sents, a, b)
         if not snapped:
             return None, [f'S{a}-S{b} cannot be cut on whole sentences']
@@ -189,6 +190,7 @@ def build_candidate(raw, sents, words):
     story['clips'] = clips
     story['_sentences'] = ranges
     story['_llm_opening'] = str(raw.get('opening_line') or '')
+    story['_llm_start'] = asked[0]   # first sentence the LLM picked, before snapping
     # The real first/last lines (not the LLM's quote) drive the hook and spoiler checks.
     story['opening_line'] = sents[ranges[0][0]]['text']
     story['payoff_line'] = sents[ranges[-1][1]]['text']
@@ -228,7 +230,8 @@ def hook_problems(story, sents, words):
     if _SETUP_DESC.search(desc):
         problems.append(f'first clip is setup ("{desc[:50]}")')
     claimed = story.get('_llm_opening')
-    nearby = ' '.join(s['text'] for s in sents[a:a + 2])
+    # Snapping can move the start back past the line the LLM quoted, so look through its own pick.
+    nearby = ' '.join(s['text'] for s in sents[a:max(a, story.get('_llm_start', a)) + 2])
     if claimed and not _quotes(claimed, nearby):
         problems.append(f'opening_line does not match S{a} (sentence numbers are off)')
     if words and sents[a]['w0'] is not None:
