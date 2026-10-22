@@ -66,6 +66,9 @@ def upload_scheduled(video_path, title, description, tags_str, publish_at_iso):
     publish_at_iso — ISO 8601 UTC string, e.g. '2026-05-23T09:00:00Z'
     Returns the YouTube video ID.
     """
+    # An @handle-first title reads as promo/spam and gets no curiosity hook.
+    if title.lstrip().startswith('@'):
+        raise ValueError(f"Refusing to upload a title that starts with an @handle: {title!r}")
     svc  = _build_svc()
     tags = [t.strip() for t in tags_str.split(',') if t.strip()]
 
@@ -75,7 +78,10 @@ def upload_scheduled(video_path, title, description, tags_str, publish_at_iso):
             'description':     description,
             'tags':            tags,
             'categoryId':      '24',   # Entertainment
-            'defaultLanguage': 'en',
+            # Explicit US-English text and audio: one of the few signals that
+            # matches a Short to its viewers' language on this IN-country channel.
+            'defaultLanguage':      'en-US',
+            'defaultAudioLanguage': 'en-US',
         },
         'status': {
             'privacyStatus':          'private',
