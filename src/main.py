@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -13,17 +14,35 @@ from drive_client import (download_video, upload_shorts, pick_video, pick_from_f
                           move_to_archive, move_to_used_folder,
                           load_transcript_cache, save_transcript_cache)
 from transcriber import transcribe_video
-from analyzer import analyze_transcript, generate_yt_metadata
+from analyzer import (analyze_candidates, generate_yt_metadata, build_sentences, build_candidate,
+                      hook_problems, overlap_problems, rank_score)
 from clipper import create_story_short, edited_duration
-from sheet_tracker import SheetTracker
+from sheet_tracker import SheetTracker, SKIP_PREFIX
 from campaigns import (get_campaign, find_banned, find_transcript_banned, enforce_caption,
-                       next_publish_time, SLOT_GUARD_MIN)
+                       next_publish_time, publish_plan, window_publish_time, episode_campaign, SLOT_GUARD_MIN,
+                       spoiler_hits, tidy_title, title_problems, clean_hashtags)
 from footage import download_from_release, sponsor_segments
 
 VIDEOS_FOLDER_ID  = os.environ.get('VIDEOS_FOLDER_ID',  '1bIFaNpfBy1Bp9R14T22EV-hMsYYrLeTS')
 SHORTS_FOLDER_ID  = os.environ.get('SHORTS_FOLDER_ID',  '1kzFXWZQu8QQVtZKeAVvSgHcLaRFfK6tg')
 ARCHIVE_FOLDER_ID = os.environ.get('ARCHIVE_FOLDER_ID', '1nHZCaWO_KvkV52TekkF8ecC5JtIlXqJj')
-TAIL_PAD = 0.5
+# A run whose best moment ranks below this uploads nothing: a weak Short stalls
+# at the ~1K seed and uses up a slot (and a Whop submission) for nothing.
+MIN_SCORE = float(os.environ.get('MIN_SCORE') or '7')
+# This many score-gate skips in a row for one campaign fails the job, so the email fires.
+MAX_CONSECUTIVE_SKIPS = 3
+
+
+class WeakMomentSkip(Exception):
+    """The best moment that passed every check still scored under MIN_SCORE."""
+
+
+def _sha1(path):
+    h = hashlib.sha1()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _probe_duration(path):
@@ -35,57 +54,143 @@ def _probe_duration(path):
     return float(out.stdout.strip()) if out.stdout.strip() else float('inf')
 
 
-def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storylines,
-                campaign, profile, src_dur, attempts=4):
-    """
-    Ask Gemini for a moment, then check it against the campaign's hard limits
-    (edited length, banned words in the hook). A rejected moment is added to
-    the avoid-list so the next attempt picks something else.
-    """
+def _candidate_problems(story, sents, all_words, used, profile):
+    """Every hard rule a candidate breaks (empty list = usable)."""
     lo, hi = profile.get('min_seconds'), profile.get('max_seconds')
-    avoid = list(used_segments)
-    for attempt in range(1, attempts + 1):
-        story = analyze_transcript(segments, gemini_api_key, used_segments=avoid,
-                                   used_storylines=used_storylines, campaign=campaign)
-        # Extend each clip end by a tail pad so sentence tone finishes naturally.
-        for c in story['clips']:
-            c['end_seconds'] = min(c['end_seconds'] + TAIL_PAD, src_dur - 0.05)
+    dur = story['_edited_seconds']
+    problems = []
+    if lo and dur < lo:
+        problems.append(f"too short after trimming ({dur:.1f}s < {lo}s)")
+    if hi and dur > hi:
+        problems.append(f"too long after trimming ({dur:.1f}s > {hi}s)")
+    problems += hook_problems(story, sents, all_words)
+    # Code-side dedupe: the LLM is told the used segments but not trusted with them.
+    problems += overlap_problems(story['clips'], used)
+    banned = find_banned(story.get('hook_text', ''), profile)
+    if banned:
+        problems.append(f"hook uses banned words {banned}")
+    spoils = spoiler_hits(story.get('hook_text', ''), story['payoff_line'], profile)
+    if len(spoils) >= 2:
+        problems.append(f"hook_text gives away the payoff {spoils}")
+    ad_hits = find_transcript_banned(story, all_words, profile)
+    if ad_hits:
+        problems.append(f"clip audio looks like an ad read {ad_hits}")
+    return problems
 
-        problems = []
-        if lo or hi:
+
+def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storylines,
+                campaign, profile, src_dur, attempts=3):
+    """
+    Ask Gemini for 3-5 candidate moments as sentence ranges, cut them on whole
+    sentences, rank them in code (0.4 hook + 0.3 payoff + 0.2 clarity + 0.1
+    length fit) and return the best one that passes every campaign rule.
+    Rejected candidates join the avoid-list for the next attempt. Raises
+    WeakMomentSkip if the best passing moment scores under MIN_SCORE.
+    """
+    sents = build_sentences(all_words, segments)
+    limits = (profile.get('min_seconds') or 12, profile.get('max_seconds') or 40)
+    min_score = profile.get('min_score', MIN_SCORE)
+    avoid = list(used_segments)
+    best_weak = None
+    for attempt in range(1, attempts + 1):
+        raws = analyze_candidates(sents, gemini_api_key, used_segments=avoid,
+                                  used_storylines=used_storylines, campaign=campaign, limits=limits)
+        ranked, used = [], list(avoid)   # candidates of one answer may overlap each other
+        for raw in raws:
+            story, problems = build_candidate(raw, sents, all_words)
+            if not story:
+                print(f"      - unusable candidate {raw.get('storyline_title', '?')}: {'; '.join(problems)}")
+                continue
+            for c in story['clips']:
+                c['end_seconds'] = min(c['end_seconds'], src_dur - 0.05)
             dur = edited_duration(story, all_words, profile['silence_thresh'])
             story['_edited_seconds'] = round(dur, 1)
-            if lo and dur < lo:
-                problems.append(f"too short after trimming ({dur:.1f}s < {lo}s)")
-            if hi and dur > hi:
-                problems.append(f"too long after trimming ({dur:.1f}s > {hi}s)")
-        banned = find_banned(story.get('hook_text', ''), profile)
-        if banned:
-            problems.append(f"hook uses banned words {banned}")
-        ad_hits = find_transcript_banned(story, all_words, profile)
-        if ad_hits:
-            problems.append(f"clip audio looks like an ad read {ad_hits}")
+            story['score'] = rank_score(story, dur)
+            problems += _candidate_problems(story, sents, all_words, used, profile)
+            ranked.append((story, problems))
+            avoid += [seg for seg in ((c['start_seconds'], c['end_seconds']) for c in story['clips'])
+                      if seg not in avoid]
+        ranked.sort(key=lambda sp: sp[0]['score'], reverse=True)
 
-        if not problems:
-            return story
-        print(f"      Attempt {attempt} rejected: {'; '.join(problems)}")
-        avoid += [(c['start_seconds'], c['end_seconds']) for c in story['clips']]
+        print(f"      Attempt {attempt}: {len(ranked)} candidate(s)")
+        for story, problems in ranked:
+            verdict = 'ok' if not problems else 'rejected: ' + '; '.join(problems)
+            print(f"        [{story['score']:.1f}] {story['storyline_title']} "
+                  f"({story['_edited_seconds']:.0f}s) \"{story['opening_line'][:60]}\" -> {verdict}")
 
+        passing = [story for story, problems in ranked if not problems]
+        if passing and passing[0]['score'] >= min_score:
+            return passing[0]
+        if passing and (not best_weak or passing[0]['score'] > best_weak['score']):
+            best_weak = passing[0]
+
+    if best_weak:
+        err = WeakMomentSkip(f"best usable moment '{best_weak['storyline_title']}' scored "
+                             f"{best_weak['score']:.1f} < {min_score:g}")
+        # Every segment the LLM offered: logged as used so the next run moves on.
+        err.segments = [seg for seg in avoid if seg not in used_segments]
+        err.score = best_weak['score']
+        raise err
     raise RuntimeError(f"No moment met the {campaign} campaign rules after {attempts} attempts")
 
 
-def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, attempts=3):
-    """YouTube metadata that satisfies the campaign's caption rules, or None."""
+def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior_titles=(), attempts=4):
+    """
+    YouTube metadata that satisfies the campaign's caption rules and the title
+    rules (no reused or "Wait…" titles, no spoilers; ideally under 60 chars,
+    leading with a real name and not opening like this campaign's recent
+    titles), or None if Gemini gives nothing. prior_titles: (episode, title).
+    """
+    all_titles = [t for _, t in prior_titles]
+    campaign_titles = [t for ep, t in prior_titles if episode_campaign(ep) == campaign]
+    fallback = None
     for attempt in range(1, attempts + 1):
-        yt_meta = generate_yt_metadata(story, episode_name, gemini_api_key, campaign=campaign)
+        yt_meta = generate_yt_metadata(story, episode_name, gemini_api_key, campaign=campaign,
+                                       title_names=profile.get('title_names'),
+                                       recent_titles=campaign_titles[-30:])
         if not yt_meta:
-            return None
+            break
+        yt_meta['title'] = tidy_title(str(yt_meta.get('title', '')))
         text = ' '.join(str(yt_meta.get(k, '')) for k in ('title', 'description', 'tags', 'pinned_comment'))
+        hard, soft = title_problems(yt_meta['title'], profile, all_titles, story.get('payoff_line', ''),
+                                    campaign_titles)
         banned = find_banned(text, profile)
-        if not banned:
-            return enforce_caption(yt_meta, profile)
-        print(f"      Metadata attempt {attempt} rejected: banned words {banned}")
-    raise RuntimeError(f"Could not generate {campaign} metadata without banned words")
+        if banned:
+            hard.append(f"banned words {banned}")
+        if not hard and not soft:
+            return clean_hashtags(enforce_caption(yt_meta, profile), profile)
+        print(f"      Metadata attempt {attempt} rejected ({yt_meta['title']!r}): {'; '.join(hard + soft)}")
+        if not hard and not fallback:
+            fallback = yt_meta
+    if fallback:
+        print(f"      Using {fallback['title']!r} despite soft title issues")
+        return clean_hashtags(enforce_caption(fallback, profile), profile)
+    if not yt_meta:
+        return None
+    raise RuntimeError(f"Could not generate {campaign} metadata that passes the title rules")
+
+
+def _record_skip(tracker, campaign, episode_name, run, skip):
+    """
+    Log a score-gate skip as a run whose offered segments are used, so the
+    next run moves on to new moments (or the next episode) instead of being
+    offered the same weak ones forever. Exits non-zero after
+    MAX_CONSECUTIVE_SKIPS skips in a row for this campaign so it gets noticed.
+    """
+    print(f"\n{'=' * 70}\nSKIPPED — NOTHING UPLOADED for {episode_name}: {skip}\n{'=' * 70}")
+    tracker.log_clips(episode_name, run, [
+        {'title': f"{SKIP_PREFIX}p{i + 1}", 'start_seconds': s, 'end_seconds': e,
+         'score': skip.score, 'reason': f"score gate: {skip}"}
+        for i, (s, e) in enumerate(skip.segments or [(0.0, 0.0)])
+    ])
+    skips = tracker.consecutive_skips(lambda ep: episode_campaign(ep) == campaign)
+    print(f"      Logged run {run} as skipped ({len(skip.segments)} segment(s) marked used); "
+          f"{skips} skip(s) in a row for {campaign}")
+    if skips >= MAX_CONSECUTIVE_SKIPS:
+        print(f"::error title=Campaign stalled::{campaign}: {skips} runs in a row skipped by the score gate "
+              f"(MIN_SCORE {MIN_SCORE:g}). Check the footage or lower MIN_SCORE.")
+        sys.exit(1)
+    print(f"::warning title=Run skipped::{campaign} {episode_name}: {skip}")
 
 
 def main():
@@ -113,11 +218,21 @@ def main():
         except Exception as e:
             print(f'  Diarization pipeline unavailable: {e} — using face-only tracking')
 
+    # A campaign with several daily slots gets one cron per slot, each passing
+    # PUBLISH_SLOT=HH:MM (ET); without it the run serves whichever slot is next.
+    pinned_slot = os.environ.get('PUBLISH_SLOT', '').strip() or None
+    if pinned_slot:
+        print(f"Publish slot pinned to {pinned_slot} ET")
+
     # GitHub cron runs can start hours late and the local fallback may also fire;
     # never put two Shorts of one campaign into the same publish slot.
-    slot = next_publish_time(profile)
+    slot, nominal = publish_plan(profile, slot=pinned_slot)
+    # Pinned: only Shorts for this slot (scheduled at or after it) count, not
+    # an earlier slot's late publish.
+    not_before = nominal if pinned_slot else None
     if slot and not video_file_id and tracker.slot_taken({ep for _, ep in profile.get('files', [])}, slot,
-                                                             window_min=SLOT_GUARD_MIN):
+                                                             window_min=SLOT_GUARD_MIN,
+                                                             not_before=not_before):
         print(f"{campaign}: a Short is already scheduled for the {slot} slot — nothing to do.")
         sys.exit(0)
 
@@ -187,18 +302,25 @@ def main():
             ads = sponsor_segments(video_file_id)
             print(f"      Avoiding {len(ads)} known ad-read segment(s) (SponsorBlock)")
             avoid_segments += ads
-        story = _pick_story(segments, all_words, gemini_api_key, avoid_segments, used_storylines,
-                            campaign, profile, src_dur)
+        try:
+            story = _pick_story(segments, all_words, gemini_api_key, avoid_segments, used_storylines,
+                                campaign, profile, src_dur)
+        except WeakMomentSkip as e:
+            _record_skip(tracker, campaign, episode_name, current_run, e)
+            return
         total_sec = story.get('_edited_seconds', story.get('_total_seconds', 0))
         print(f"      Story: [{story['score']}/10] ({story.get('format', 'story_recap')}) {story['storyline_title']}  (~{total_sec:.0f}s total)")
         print(f"      Summary: {story['storyline_summary']}")
+        print(f"      Opens : \"{story['opening_line']}\"")
+        print(f"      Ends  : \"{story['payoff_line']}\"")
         print(f"      {len(story['clips'])} clips:")
         for c in story['clips']:
             dur = c['end_seconds'] - c['start_seconds']
-            print(f"        [{c['label']}] {c['start_seconds']:.0f}s-{c['end_seconds']:.0f}s ({dur:.0f}s) — {c['description']}")
+            print(f"        [{c['label']}] {c['start_seconds']:.1f}s-{c['end_seconds']:.1f}s ({dur:.0f}s) — {c['description']}")
 
         print("      Generating YouTube metadata...")
-        yt_meta = _make_metadata(story, episode_name, gemini_api_key, campaign, profile)
+        prior_titles = tracker.get_prior_titles()
+        yt_meta = _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior_titles)
         if yt_meta:
             print(f"      YT title: {yt_meta.get('title', '')}")
 
@@ -217,6 +339,13 @@ def main():
             if ((profile.get('min_seconds') and final_dur < profile['min_seconds'] - 1) or
                     (profile.get('max_seconds') and final_dur > profile['max_seconds'] + 2)):
                 raise RuntimeError(f"Rendered short is {final_dur:.1f}s — outside the {campaign} brief's limits")
+
+        # Never re-upload: repeat uploads get treated as reused content, seed worse and burn a slot.
+        file_sha1 = _sha1(short_path)
+        if yt_meta:
+            dup = tracker.find_prior_upload(yt_meta['title'], file_sha1)
+            if dup:
+                raise RuntimeError(f"Refusing to upload: {dup}")
 
         print("[5/5] Uploading to Drive...")
         uploaded = upload_shorts([short_path], SHORTS_FOLDER_ID, service_account_info)
@@ -239,7 +368,9 @@ def main():
             # Row must exist before update_yt_url fills in scheduled_at / yt_url.
             tracker.log_posting_metadata(episode_name, current_run, story, yt_meta)
             from youtube_client import upload_scheduled, add_to_playlist
-            publish_at = next_publish_time(profile) or tracker.get_next_publish_slot()
+            # Profiles without slots publish ASAP, but still only in the US-evening window.
+            publish_at = (next_publish_time(profile, slot=pinned_slot)
+                          or window_publish_time(tracker.get_next_publish_slot()))
             print(f"[5b] Scheduling on YouTube → {publish_at}...")
             yt_video_id = upload_scheduled(
                 short_path,
@@ -250,7 +381,7 @@ def main():
             )
             print(f"      https://youtu.be/{yt_video_id}")
             tracker.update_yt_url(episode_name, current_run,
-                                  story['storyline_title'], yt_video_id, publish_at)
+                                  story['storyline_title'], yt_video_id, publish_at, file_sha1=file_sha1)
 
             series_tag = story.get('series_tag', '')
             playlist_title = profile.get('playlist') or _SERIES_PLAYLIST.get(series_tag)
