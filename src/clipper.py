@@ -41,6 +41,16 @@ _MAX_HOLD_A, _MAX_HOLD_B = 1.6, 0.7
 _REACTION_HOLD = 0.8          # hold after a source cut into a reaction in the tail
 _KEEP_END_S = 2.0
 _SHOT_CAP_S = 4.0
+# Podcast / talk (niche B): one static camera often holds 10 s+, so the same cap
+# applies there, with punches allowed on any word boundary (talk rarely pauses).
+_SHOT_CAP_B = 4.0
+# ...and the payoff push only covers the last few seconds before the payoff
+# (from the part's last camera cut it can span a whole one-camera answer).
+_PUSH_B_LEAD = 2.5
+# Talk tail: the next speaker often starts at once. The picture holds tail_s
+# anyway and the audio fades out just before their first word.
+_HOLD_FADE = 0.08
+_HOLD_FADE_LEAD = 0.10
 _PUNCH_HI, _PUNCH_LO = 1.10, 1.06   # punch level; LO when the source crop is < 900 px wide
 _PUNCH_GAP_S = 3.0
 _CALM_HOOK_S = 1.2
@@ -51,7 +61,8 @@ _SENTENCE_END = re.compile(r'[.!?]["\')\]]*$')
 
 
 def _split_by_speech(clip_start, clip_end, all_words, silence_thresh=_SILENCE_THRESH,
-                     final=True, tail=None, max_hold=None, tail_cut=None, keep_end_s=0.0):
+                     final=True, tail=None, max_hold=None, tail_cut=None, keep_end_s=0.0,
+                     hold_over=False):
     """
     Split [clip_start, clip_end] into speech sub-intervals.
 
@@ -68,7 +79,9 @@ def _split_by_speech(clip_start, clip_end, all_words, silence_thresh=_SILENCE_TH
     `tail` after the last word instead (A 1.0 s, B 0.5 s); a source cut to a
     reaction inside that window extends it to cut + 0.8 s, never past
     max_hold; pauses within keep_end_s of the last word are never shortened
-    (native laughs before the payoff).
+    (native laughs before the payoff). hold_over (talk): the tail is kept
+    even when the next speaker starts inside it (the caller fades that
+    audio out, see _held_tail).
 
     Returns a list of (start, end) tuples in episode time.
     Falls back to [(clip_start, clip_end)] if no words are found in range.
@@ -91,7 +104,7 @@ def _split_by_speech(clip_start, clip_end, all_words, silence_thresh=_SILENCE_TH
     else:
         tail = _TAIL_FINAL if final else _TAIL_HOLD
         end = min(max(clip_end, last_end + tail), last_end + _MAX_HOLD)
-    if following:
+    if following and not (hold_over and tail is not None):
         end = min(end, max(words[-1]['end'] + 0.05, following[0] - 0.05))
     # Never before the requested start: upstream snaps it to a sentence start,
     # and earlier would reach into the previous word.
@@ -186,7 +199,9 @@ def _render_config(render, story, wide_fallback=False):
         'tail_s': tail,
         'max_hold': _MAX_HOLD_A if niche == 'A' else max(tail, _MAX_HOLD_B),
         'reaction_cut': niche == 'A',
-        'shot_cap': render.get('shot_cap_s', _SHOT_CAP_S if niche == 'A' else None),
+        'shot_cap': render.get('shot_cap_s', _SHOT_CAP_S if niche == 'A' else _SHOT_CAP_B),
+        # talk: hold the tail over the next speaker's first word (audio faded)
+        'hold_over': niche == 'B',
         'boom': boom, 'music': music,
         'names': names or None,
     }
@@ -217,7 +232,8 @@ def _story_parts(story, all_words, silence_thresh, cfg=None, video_path=None):
             continue
         kw = {}
         if cfg and final:
-            kw = {'tail': cfg['tail_s'], 'max_hold': cfg['max_hold'], 'keep_end_s': _KEEP_END_S}
+            kw = {'tail': cfg['tail_s'], 'max_hold': cfg['max_hold'], 'keep_end_s': _KEEP_END_S,
+                  'hold_over': bool(cfg.get('hold_over'))}
             if cfg['reaction_cut'] and video_path:
                 words = [w for w in all_words if cs <= w['start'] < ce
                          and w['end'] <= ce + _END_SLACK]
@@ -226,6 +242,23 @@ def _story_parts(story, all_words, silence_thresh, cfg=None, video_path=None):
                     kw['tail_cut'] = _tail_cut(video_path, last, last + cfg['tail_s'])
         out.append(_split_by_speech(cs, ce, all_words, silence_thresh, final=final, **kw))
     return out
+
+
+def _held_tail(story, all_words, final_end):
+    """
+    (last word end, next word start) in episode time when the final clip's
+    tail hold runs into the next speaker's first word (hold_over), else None.
+    """
+    clip = story['clips'][-1]
+    cs, ce = clip['start_seconds'], clip['end_seconds']
+    words = [w for w in all_words or [] if cs <= w['start'] < ce and w['end'] <= ce + _END_SLACK]
+    if not words:
+        return None
+    last_end = words[-1]['end']
+    nxt = next((w['start'] for w in all_words if w['start'] >= last_end), None)
+    if nxt is None or nxt >= final_end:
+        return None
+    return last_end, nxt
 
 
 def _remap_t(t, segments):
@@ -276,13 +309,14 @@ def _level_fn(stretches, toggles):
     return level
 
 
-def _punch_plan(parts, words_out, payoff_out, crop_w, push_from):
+def _punch_plan(parts, words_out, payoff_out, crop_w, push_from, cap=_SHOT_CAP_S, any_gap=False):
     """
-    4 s shot cap: inside any stretch of the output with no hard cut for > 4 s,
+    Shot cap (default 4 s): inside any stretch of the output with no hard cut for > cap,
     toggle a punch-in (1.00 <-> 1.10, or 1.06 on narrow source crops) at a word
     boundary — sentence ends first, then silence-trim joins, then any word gap.
     At most one punch per 3 s, none in 0-1.2 s (calm hook), none in the 0.6 s
-    before the payoff word, none inside the payoff push.
+    before the payoff word, none inside the payoff push. any_gap (talk, where
+    speech rarely pauses 80 ms) also allows a plain word boundary, last choice.
 
     parts: [{'off', 'dur', 'clip', 'cuts' (output s)}]. Returns (stretches, toggles).
     """
@@ -298,20 +332,22 @@ def _punch_plan(parts, words_out, payoff_out, crop_w, push_from):
     for a, b in zip(words_out, words_out[1:]):
         if b['start'] - a['end'] >= 0.08:
             cands.append(((a['end'] + b['start']) / 2, 3 if _SENTENCE_END.search(a['word'].strip()) else 1))
+        elif any_gap and b['start'] >= a['end'] - 0.01:
+            cands.append(((a['end'] + b['start']) / 2, 0))
     hi = _PUNCH_HI if crop_w >= 900 else _PUNCH_LO
     toggles, last = [], -99.0
     for s, e in stretches:
         t, level = s, 1.0
-        while e - t > _SHOT_CAP_S:
+        while e - t > cap:
             valid = [(ct, pr) for ct, pr in cands
                      if t + 1.0 <= ct <= e - 0.8 and ct >= _CALM_HOOK_S
                      and ct - last >= _PUNCH_GAP_S
                      and not (payoff_out is not None and payoff_out - 0.6 <= ct <= payoff_out + 0.05)
                      and not (push_from is not None and ct > push_from + 0.01)]
-            ok = [c for c in valid if c[0] <= t + _SHOT_CAP_S]
+            ok = [c for c in valid if c[0] <= t + cap]
             if ok:
                 # prefer the back half of the window so one punch covers more of the stretch
-                late = [c for c in ok if c[0] >= t + _SHOT_CAP_S / 2] or ok
+                late = [c for c in ok if c[0] >= t + cap / 2] or ok
                 ct = max(late, key=lambda c: (c[1], c[0]))[0]
             elif valid:
                 ct = min(valid)[0]          # no boundary inside 4 s: the first one after it
@@ -400,6 +436,12 @@ def create_story_short(video_path, story, output_dir, episode_name,
     merged_path = os.path.join(output_dir, '_merged.mkv')
     try:
         all_subs = _story_parts(story, all_words, silence_thresh, cfg, video_path)
+        held = None
+        if cfg and cfg.get('hold_over') and all_words and all_subs and all_subs[-1]:
+            held = _held_tail(story, all_words, all_subs[-1][-1][1])
+            if held:
+                # the next speaker's words in the held tail are neither captioned nor counted
+                all_words = [w for w in all_words if not held[1] <= w['start'] < all_subs[-1][-1][1] + 0.01]
         jobs = []          # (clip index, sub-clip index, start, end)
         for i, (clip, subs) in enumerate(zip(clips, all_subs), 1):
             cs, ce = clip['start_seconds'], clip['end_seconds']
@@ -434,7 +476,13 @@ def create_story_short(video_path, story, output_dir, episode_name,
                 part_paths.append(part_path)
 
         print(f"  Merging {len(part_paths)} parts...")
-        _build_audio(video_path, expanded_clips, audio_path)
+        fade = None
+        if held:
+            last_end, nxt = held
+            f0 = max(last_end + 0.02, nxt - _HOLD_FADE_LEAD) - expanded_clips[-1]['start_seconds']
+            fade = (max(0.0, f0), _HOLD_FADE)
+            print(f"  Tail held over the next speaker: audio fades {f0:.2f}s into the last part")
+        _build_audio(video_path, expanded_clips, audio_path, fade_out=fade)
         if cfg and cfg['boom'] and plan.get('payoff_out') is not None:
             if _add_payoff_boom(audio_path, plan['payoff_out']):
                 print(f"  Payoff boom at {plan['payoff_out']:.2f}s (experiment flag)")
@@ -499,6 +547,9 @@ def _plan_render(video_path, jobs, segments, story, all_words, cfg, pipeline,
                           if p['off'] <= payoff_out < p['off'] + p['dur']), len(parts) - 1)
         p = parts[push_part]
         start = max([p['off']] + [c for c in p['cuts'] if c < payoff_out])
+        if cfg['niche'] == 'B':
+            # a one-camera answer has no cut to start from: push over the last beat only
+            start = max(start, min(payoff_out - _PUSH_B_LEAD, p['off'] + p['dur'] - _PUSH_MIN_S))
         if p['off'] + p['dur'] - start >= _PUSH_MIN_S:
             push_from = start
             push = (int(round((start - p['off']) * p['fps'])), _PUSH_PAYOFF)
@@ -510,7 +561,8 @@ def _plan_render(video_path, jobs, segments, story, all_words, cfg, pipeline,
         crop_w = min(an['src_w'], an['src_h'] * aspect)
     toggles = []
     if cfg['shot_cap']:
-        stretches, toggles = _punch_plan(parts, words_out, payoff_out, crop_w, push_from)
+        stretches, toggles = _punch_plan(parts, words_out, payoff_out, crop_w, push_from,
+                                         cap=float(cfg['shot_cap']), any_gap=cfg['niche'] == 'B')
         level = _level_fn(stretches, toggles)
     else:
         level = lambda t: 1.0
@@ -655,8 +707,11 @@ def _stereo_filter(video_path):
     return 'aformat=channel_layouts=stereo'
 
 
-def _build_audio(video_path, segments, out_wav):
+def _build_audio(video_path, segments, out_wav, fade_out=None):
     """
+    fade_out: (seconds into the last segment, duration): fade the audio to
+    silence there (a held talk tail over the next speaker's first word).
+
     Cut every segment's audio straight from the source (exact frame-grid
     durations), fade each join in/out by _JOIN_FADE and concatenate into one
     48 kHz stereo PCM track — no per-part AAC encode, so no priming gaps/clicks.
@@ -668,10 +723,13 @@ def _build_audio(video_path, segments, out_wav):
         d = e - s
         inputs += ['-ss', f'{s:.6f}', '-t', f'{d + 0.1:.6f}', '-i', video_path]
         fade = min(_JOIN_FADE, d / 4)
+        out_st, out_d = d - fade, fade
+        if fade_out and k == len(segments) - 1 and fade_out[0] < d - fade:
+            out_st, out_d = fade_out[0], min(fade_out[1], d - fade_out[0])
         chains.append(
             f"[{k}:a:0]aresample=48000,{stereo},apad,atrim=duration={d:.6f},"
             f"asetpts=PTS-STARTPTS,afade=t=in:d={fade:.3f},"
-            f"afade=t=out:st={d - fade:.6f}:d={fade:.3f}[a{k}]")
+            f"afade=t=out:st={out_st:.6f}:d={out_d:.3f}[a{k}]")
         labels.append(f"[a{k}]")
     filter_complex = ";".join(chains) + f";{''.join(labels)}concat=n={len(segments)}:v=0:a=1[aout]"
     # Passed inline: -filter_complex_script is deprecated in ffmpeg 8 and its

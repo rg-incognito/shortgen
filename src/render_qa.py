@@ -150,13 +150,18 @@ def _caption_box(frame, diff=None, rows=(700, 1500)):
              if 12 <= st[i][3] <= 80 and st[i][4] > 15 and st[i][2] < 100]
     if len(comps) < 2:
         return None
-    # the caption line = the largest group of glyphs sharing a baseline
+    # the caption line = the tallest group of >= 2 glyphs sharing a baseline. A
+    # smaller white label just under it (a brief's "BILF Podcast" handle) often
+    # has more glyphs, so glyph count alone measured the label (30 px) instead.
     comps.sort(key=lambda s: s[1] + s[3])
-    best = []
+    best, best_key = [], None
     for c in comps:
         grp = [d for d in comps if abs((d[1] + d[3]) - (c[1] + c[3])) <= 3]
-        if len(grp) > len(best):
-            best = grp
+        if len(grp) < 2:
+            continue
+        key = (float(np.median([g[3] for g in grp])) // 4, len(grp))
+        if best_key is None or key > best_key:
+            best, best_key = grp, key
     if len(best) < 2:
         return None
     cap = float(np.median([g[3] for g in best])) * QS
