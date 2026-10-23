@@ -7,6 +7,8 @@ and the brief's hard rules (clip length, required caption text, banned topics)
 are enforced in code rather than trusted to the LLM.
 """
 import datetime
+import itertools
+import random
 import re
 from zoneinfo import ZoneInfo
 
@@ -23,6 +25,36 @@ _LATE_GRACE_MIN = 90      # run finished a bit after its slot -> publish ASAP, n
 # A late run publishes up to this long after its slot; the duplicate-slot guard must look that far back.
 SLOT_GUARD_MIN = _LATE_GRACE_MIN + _PROCESSING_MIN + 15
 
+# ---------------------------------------------------------------------------
+# Render config (contract with the render side): niche A = sitcom / reality /
+# drama, niche B = podcast / late-night / creator talk. Whop briefs decide what
+# a campaign may add, so the defaults are conservative: no added overlay text,
+# no handle, no music, no SFX. Only a profile that sets a key turns it on.
+# ---------------------------------------------------------------------------
+_RENDER_DEFAULTS = {
+    'A': {'niche': 'A', 'template': 'A1', 'caption_preset': 'tv', 'header': True,
+          'overlays_allowed': False, 'handle': None, 'tail_s': 1.0},
+    'B': {'niche': 'B', 'template': 'B1', 'caption_preset': 'talk', 'header': False,
+          'overlays_allowed': False, 'handle': None, 'tail_s': 0.5},
+}
+
+
+def _render(niche, **overrides):
+    r = dict(_RENDER_DEFAULTS[niche])
+    r.update({'allow_music': False, 'music_mode': 'off',
+              'allow_sfx': False, 'sfx': {'payoff_boom': False, 'time_jump_flash': False},
+              'max_duration': 60})
+    r.update(overrides)
+    return r
+
+
+# Length by niche: 16-25 s had the best viral rate (87%) and our own retention
+# falls past 35 s. B allows up to LONG_ARC_MAX only for one escalating story
+# whose payoff sits in the last 30%; nothing unlicensed ever goes over 60 s.
+NICHE_LENGTH = {'A': {'target': (14, 25), 'max': 32}, 'B': {'target': (16, 30), 'max': 35}}
+LONG_ARC_MAX = 60.0
+LONG_ARC_PAYOFF_POS = 0.70
+
 CAMPAIGNS = {
     'friends': {
         'source':          'drive_folder',
@@ -36,6 +68,15 @@ CAMPAIGNS = {
         # Titles lead with what US viewers search: the show or the actor (not the character).
         'title_names':     ['Friends', 'Jennifer Aniston', 'Courteney Cox', 'Lisa Kudrow',
                             'Matt LeBlanc', 'Matthew Perry', 'David Schwimmer'],
+        # Characters: not counted as content words when checking headers and overlays for echoes.
+        'cast_names':      ['Ross', 'Rachel', 'Monica', 'Chandler', 'Joey', 'Phoebe', 'Gunther', 'Janice',
+                            'Emily', 'Carol', 'Susan', 'Mike', 'Richard', 'Ursula', 'Frank'],
+        'genre':           'sitcom',
+        # Our own channel: the originality layer and the handle are ours to add.
+        'render':          _render('A', overlays_allowed=True, handle='@theonewhereclips'),
+        # Opening credits are burned over the first scene after the theme: a cheap prior
+        # next to the burned-text detector (episode seconds 0-avoid_first_s are avoided).
+        'avoid_first_s':   240,
     },
 
     # Whop: Clip Farm — "Love is Blind" (Netflix, season 11)
@@ -63,6 +104,10 @@ CAMPAIGNS = {
         # Women 18-34: US evening + late night in bed (21:30 was the only 100% tier-1 slot).
         'publish_slots_et': ['19:00', '21:30'],
         'title_names':     ['Love Is Blind'],
+        'genre':           'reality',
+        # Brief: original sound (music stays off). Added overlay text and a handle are not
+        # confirmed as allowed, so only today's header is shown.
+        'render':          _render('A'),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/382b0008-cecb-4b86-89a1-e5c8ef074ca7',
         'required_caption': ['Love Is Blind', 'Netflix', '#loveisblind'],
         'caption_footer':   'Watch Love Is Blind on Netflix.\n\n#loveisblind #LoveIsBlindNetflix #Netflix',
@@ -114,6 +159,11 @@ CAMPAIGNS = {
         # Self-improvement: evening wind-down scroll (the 7 AM ET slot seeded India).
         'publish_slots_et': ['20:00'],
         'title_names':     ['Mark Manson'],
+        'genre':           'podcast',
+        # Brief: full subtitles, Mark on screen in 5 s. Full-bleed, no added text.
+        'render':          _render('B', caption_preset='full_subs'),
+        # Big life questions are this show's topic, not a vague tease.
+        'vague_exempt':    ['life'],
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/6bdc8e4b-3ebf-44f1-aedb-067589ca9c89',
         'required_caption': ['@solvedpodcast', '@iammarkmanson'],
         'caption_footer':   'From Solved with Mark Manson @solvedpodcast @iammarkmanson\n\n#MarkManson #SolvedPodcast #selfimprovement',
@@ -155,6 +205,8 @@ CAMPAIGNS = {
         # Relationship drama: after-dinner scroll.
         'publish_slots_et': ['19:30'],
         'title_names':     ['Zach Justice', 'Love & Justice', 'Love and Justice', 'HardScope'],
+        'genre':           'reality',
+        'render':          _render('A'),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/3b59058d-81d1-489b-bf54-97375caa10ad',
         'required_caption': ['#LOVEANDJUSTICE', '@HardScopeTV'],
         'caption_footer':   'Full episode of Love & Justice on @HardScopeTV\n\n#LOVEANDJUSTICE #ZachJustice #HardScope',
@@ -190,6 +242,8 @@ CAMPAIGNS = {
         # Collectibles, younger male audience: late evening.
         'publish_slots_et': ['21:00'],
         'title_names':     ['Unpacked', 'MatCrackz', 'Steve Aoki', 'YourRAGE', 'HardScope'],
+        'genre':           'talk',
+        'render':          _render('B'),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/c85645f1-b75f-49e2-91d5-988cf9b3fadb',
         # Each episode is its own Whop campaign; submitting to the wrong one is a ban.
         'whop_campaigns': {
@@ -233,6 +287,9 @@ CAMPAIGNS = {
         'publish_slots_et': ['18:30'],
         # Real names only, never the brand (the brief wants it to look organic).
         'title_names':     ['IShowSpeed', 'Jay Cutler', 'Phil Heath'],
+        'genre':           'talk',
+        # Brief: must look organic: no @, no brand, no added text beyond captions.
+        'render':          _render('B'),
         # No required caption text: the brief wants it to look organic, not branded.
         'banned_patterns': [
             r'young\s?la', r'@\w+', r'\bsponsor', r'\b#?ad\b', r'\bshop\b', r'\blink\b', r'\bdiscount\b',
@@ -421,7 +478,7 @@ def content_words(text, exclude=()):
     """Distinctive words (4+ letters, not stop-words or names in exclude) used to spot spoilers."""
     skip = {w for name in exclude for w in norm_title(name).split()}
     return {w for w in re.findall(r"[a-z']{4,}", (text or '').lower().replace("'", ''))
-            if w not in _STOP and w not in skip}
+            if w not in _STOP and w not in skip and not (w.endswith('s') and w[:-1] in skip)}
 
 
 def spoiler_hits(text, payoff_line, profile):
@@ -455,18 +512,23 @@ def _title_head(title, profile, n=4):
     return words[:n]
 
 
-def title_problems(title, profile, prior_titles=(), payoff_line='', campaign_titles=()):
+def title_problems(title, profile, prior_titles=(), payoff_line='', campaign_titles=(), vague_hard=False):
     """
     (hard, soft) problems with a title. Hard ones must be fixed before upload:
-    "Wait…"-style openers, an exact reuse of any earlier title and spoiling the
-    payoff. Soft ones are preferences the LLM should meet, including not
-    reusing the opening words (after the leading name) of this campaign's
-    recent titles.
+    "Wait…"-style openers, an exact reuse of any earlier title, spoiling the
+    payoff and (vague_hard, as the upload path uses it) a vague tease word with
+    no concrete object. Soft ones are preferences the LLM should meet,
+    including not reusing the opening words (after the leading name) of this
+    campaign's recent titles.
     """
     hard, soft = [], []
     norm = norm_title(title)
     if _BANNED_OPENERS.search(title or ''):
         hard.append('banned opener')
+    if vague_hard:
+        vague = vague_hits(title, profile.get('vague_exempt', ()))
+        if vague:
+            hard.append(f'vague words {vague}')
     if re.search(r'really just say that', norm):
         hard.append('templated "really just say that" title')
     if norm in {norm_title(t) for t in prior_titles if t}:
@@ -526,3 +588,275 @@ def clean_hashtags(yt_meta, profile):
     tags = [t.strip() for t in str(yt_meta.get('tags', '')).split(',') if t.strip()]
     yt_meta['tags'] = ', '.join(t for t in tags if t.lower() not in _BROAD_TAGS)
     return enforce_caption(yt_meta, profile)
+
+
+# ---------------------------------------------------------------------------
+# Header, overlay and length rules (packaging v2)
+# ---------------------------------------------------------------------------
+
+# Vague tease words: 18% of corpus virals vs 39% of flops (and 46% of our titles).
+# These never name anything concrete:
+VAGUE_ALWAYS = {'something', 'unexpected', 'exposed', 'moment', 'moments', 'changed', 'reaction',
+                'reactions', 'life'}
+# ...and these are fine only when the concrete thing follows ("this sandwich", "secret job").
+VAGUE_NEEDS_OBJECT = {'this', 'that', 'secret', 'secrets', 'truth'}
+HEADER_MAX_WORDS = 9
+HEADER_OPENER_WORDS = 3
+HEADER_OPENER_LOOKBACK = 30
+
+
+def vague_hits(text, exempt=()):
+    """Vague tease words in text that have no concrete object after them."""
+    words = re.findall(r"[a-z0-9$']+", (text or '').lower().replace('’', "'"))
+    skip = {w.lower() for w in exempt}
+    hits = []
+    for i, w in enumerate(words):
+        if w in skip:
+            continue
+        if w in VAGUE_ALWAYS:
+            hits.append(w)
+        elif w in VAGUE_NEEDS_OBJECT:
+            nxt = words[i + 1].replace("'s", '') if i + 1 < len(words) else ''
+            if len(nxt) < 3 or nxt in _STOP or nxt in VAGUE_ALWAYS or nxt in VAGUE_NEEDS_OBJECT:
+                hits.append(w)
+    return hits
+
+
+def _names(profile):
+    return list(profile.get('title_names') or []) + list(profile.get('cast_names') or [])
+
+
+def _proper_nouns(text, anywhere=False):
+    """Capitalised words in text (only mid-sentence ones unless anywhere), e.g. names in a reveal."""
+    out = []
+    for m in re.finditer(r"[A-Za-z][a-z']+", text or ''):
+        w = m.group(0)
+        before = (text or '')[:m.start()].rstrip()
+        start = not before or before[-1] in '.?!"'
+        if w[0].isupper() and (anywhere or not start) and w.lower() not in _STOP:
+            out.append(re.sub(r"'s$", '', w))
+    return out
+
+
+def header_opener(header, n=HEADER_OPENER_WORDS):
+    return ' '.join(norm_title(header).split()[:n])
+
+
+def header_problems(story, profile, prior_headers=()):
+    """
+    Hard problems with the on-screen header: too long, a vague tease, any
+    content word shared with the payoff or the LLM's own reveal (it is read
+    before the joke lands), a banned brief term, or the same opening words as
+    one of the last 30 headers.
+    """
+    header = story.get('header') or story.get('hook_text') or ''
+    if not header:
+        return ['missing header']
+    problems = []
+    n = len(norm_title(header).split())
+    if n > HEADER_MAX_WORDS:
+        problems.append(f'header is {n} words > {HEADER_MAX_WORDS}')
+    vague = vague_hits(header, profile.get('vague_exempt', ()))
+    if vague:
+        problems.append(f'header uses vague words {vague}')
+    # The header must name a person, who is usually in the payoff and the reveal too: proper
+    # names (profile names, capitalised words in the reveal, mid-sentence capitals in the
+    # dialogue) are not spoilers.
+    names = _names(profile) + _proper_nouns(story.get('reveal'), anywhere=True)
+    for k in ('payoff_line', '_payoff_text'):
+        names += _proper_nouns(story.get(k))
+    spoil_src = ' '.join(str(story.get(k) or '') for k in ('payoff_line', '_payoff_text', 'reveal'))
+    spoils = sorted(content_words(spoil_src, names) & content_words(header, names))
+    if spoils:
+        problems.append(f'header gives away the payoff {spoils}')
+    banned = find_banned(header, profile)
+    if banned:
+        problems.append(f'header uses banned words {banned}')
+    opener = header_opener(header)
+    recent = [header_opener(h) for h in list(prior_headers)[-HEADER_OPENER_LOOKBACK:] if h]
+    if len(opener.split()) == HEADER_OPENER_WORDS and opener in recent:
+        problems.append(f'header opens like a recent one ("{opener}")')
+    return problems
+
+
+def _tokens(text, names=()):
+    skip = {w.replace("'", '') for name in names for w in norm_title(name).split()}
+    return [w for w in re.findall(r"[a-z0-9']+", (text or '').lower().replace("'", ''))
+            if len(w) >= 3 and w not in _STOP and w not in skip and not (w.endswith('s') and w[:-1] in skip)]
+
+
+def echo_problem(text, transcript, names=()):
+    """
+    Why an overlay line only repeats the dialogue (it must add a voice, not a
+    transcription): any shared 3-word run that is not all stop-words, or 40%+
+    of its content words spoken in the clip. None if it is original.
+    """
+    words = re.findall(r"[a-z0-9']+", (text or '').lower().replace("'", ''))
+    spoken = re.findall(r"[a-z0-9']+", (transcript or '').lower().replace("'", ''))
+    grams = {tuple(spoken[i:i + 3]) for i in range(len(spoken) - 2)}
+    for i in range(len(words) - 2):
+        g = tuple(words[i:i + 3])
+        if g in grams and not all(w in _STOP or len(w) < 3 for w in g):
+            return f'repeats the line "{" ".join(g)}"'
+    toks = _tokens(text, names)
+    said = set(_tokens(transcript, names))
+    if toks:
+        share = sum(t in said for t in toks) / len(toks)
+        if share >= 0.4:
+            return f'{share:.0%} of its words are spoken in the clip'
+    return None
+
+
+def overlay_checks(story, all_words, profile):
+    """
+    {field: reason} for every originality-layer line (context_line,
+    closing_line, each annotation) that echoes the clip or uses a banned or
+    vague term, plus 'header' if the header echoes the dialogue.
+    """
+    transcript = clip_text(story, all_words) if all_words else ' '.join(
+        str(story.get(k) or '') for k in ('opening_line', 'payoff_line'))
+    names = _names(profile) + _proper_nouns(transcript)   # naming who is on screen is not an echo
+    exempt = profile.get('vague_exempt', ())
+    bad = {}
+    header = story.get('header') or story.get('hook_text')
+    if header:
+        why = echo_problem(header, transcript, names)
+        if why:
+            bad['header'] = why
+    lines = [(k, story.get(k)) for k in ('context_line', 'closing_line')]
+    lines += [(f"annotation@{a['t']:.1f}", a['text']) for a in story.get('annotations') or []]
+    for field, text in lines:
+        if not text:
+            continue
+        why = echo_problem(text, transcript, names)
+        banned = find_banned(text, profile)
+        if banned:
+            why = f'banned words {banned}'
+        elif not why and field == 'context_line' and vague_hits(text, exempt):
+            why = f'vague words {vague_hits(text, exempt)}'
+        if why:
+            bad[field] = why
+    return bad
+
+
+def render_config(profile):
+    """The profile's render dict (contract keys), defaulting by niche for profiles that predate it."""
+    return profile.get('render') or _render('A')
+
+
+def length_plan(profile):
+    """(min_seconds, hard max, target range) for the profile's niche, inside the brief's own limits."""
+    niche = NICHE_LENGTH[render_config(profile).get('niche', 'A')]
+    lo = profile.get('min_seconds') or 12.0
+    hi = min(profile.get('max_seconds') or niche['max'], niche['max'])
+    t_lo, t_hi = niche['target']
+    t_lo = max(t_lo, lo)
+    return lo, hi, (t_lo, max(t_lo, min(t_hi, hi)))
+
+
+def story_max_seconds(story, profile):
+    """Hard max for this story: the niche max, or up to 60 s for a single long arc in niche B."""
+    _, hi, _ = length_plan(profile)
+    render = render_config(profile)
+    if (render.get('niche') == 'B' and story.get('single_story_arc')
+            and story.get('_payoff_pos', 0) >= LONG_ARC_PAYOFF_POS):
+        return min(LONG_ARC_MAX, float(render.get('max_duration') or LONG_ARC_MAX))
+    return hi
+
+
+def layer_caps(profile):
+    """(framing_cap, originality_cap): rubric points this campaign can earn with what it may show."""
+    render = render_config(profile)
+    shows_text = bool(render.get('header') or render.get('overlays_allowed'))
+    return (2 if shows_text else 0), (2 if shows_text else 0)
+
+
+def rubric_gate(profile, base=11):
+    """
+    Minimum rubric total (of 16). A campaign that may not show framing or
+    originality text cannot earn those 4 points, so its gate scales with
+    what is reachable (11/16 of 12 -> 9). A profile can set min_rubric.
+    """
+    if profile.get('min_rubric') is not None:
+        return profile['min_rubric']
+    reachable = 12 + sum(layer_caps(profile))
+    return -(-base * reachable // 16)
+
+
+# ---------------------------------------------------------------------------
+# Experiments (BUILD_PLAN section 5). Unit = one upload; blocked randomisation
+# within each campaign: every consecutive block of len(cells) uploads gets each
+# cell once. Off until the hygiene baseline week is done: set 'active': True
+# here or list ids in the EXPERIMENTS_ON env var (e.g. "X1,X2").
+# ---------------------------------------------------------------------------
+EXPERIMENTS = {
+    'X1': {'factor': 'overlay',  'arms': ['on', 'off'],   'campaigns': ['friends'], 'active': False,
+           'requires': 'overlays_allowed'},
+    'X2': {'factor': 'template', 'arms': ['A1', 'A2'],    'campaigns': ['friends'], 'active': False},
+    # Needs a licensed music library first (user decision); allow_music stays False until then.
+    'X3': {'factor': 'music',    'arms': ['bed', 'off'],  'campaigns': ['markmanson', 'unpacked'],
+           'active': False, 'requires': 'allow_music'},
+    # Non-laugh-track sources only; allow_sfx stays False until a brief allows it.
+    'X4': {'factor': 'sfx',      'arms': ['boom', 'off'], 'campaigns': ['loveisblind', 'loveandjustice'],
+           'active': False, 'requires': 'allow_sfx'},
+}
+
+
+def base_variant(render):
+    """Contract variant for a render config with no experiment running."""
+    sfx = render.get('sfx') or {}
+    return {
+        'template': render.get('template', 'A1'),
+        'overlay':  'on' if render.get('overlays_allowed') else 'off',
+        'music':    'bed' if render.get('allow_music') and render.get('music_mode') == 'bed' else 'off',
+        'sfx':      'boom' if render.get('allow_sfx') and sfx.get('payoff_boom') else 'off',
+    }
+
+
+def active_experiments(campaign, render, enabled=None):
+    """[(id, experiment)] running for this campaign, skipping any whose factor the brief does not allow."""
+    enabled = {e.strip() for e in (enabled or '').split(',') if e.strip()}
+    out = []
+    for eid, exp in EXPERIMENTS.items():
+        if not (exp.get('active') or eid in enabled) or campaign not in exp['campaigns']:
+            continue
+        if exp.get('requires') and not render.get(exp['requires']):
+            continue
+        out.append((eid, exp))
+    return out
+
+
+def assign_variant(campaign, render, prior, seed, enabled=None):
+    """
+    (variant, experiment ids). prior: this campaign's earlier logged variants,
+    oldest first (dicts with an 'exp' list). Within the current block the cell
+    is drawn (seeded by episode and run) from the cells not used yet, so
+    consecutive pairs (X1 alone) or quads (X1 x X2) each get every arm once.
+    """
+    variant = base_variant(render)
+    exps = active_experiments(campaign, render, enabled)
+    if not exps:
+        return variant, []
+    ids = [eid for eid, _ in exps]
+    cells = list(itertools.product(*[exp['arms'] for _, exp in exps]))
+    same = [p for p in prior if isinstance(p, dict) and sorted(p.get('exp') or []) == sorted(ids)]
+    pos = len(same) % len(cells)
+    used = [tuple(p.get(exp['factor']) for _, exp in exps) for p in same[len(same) - pos:]] if pos else []
+    remaining = [c for c in cells if c not in used] or cells
+    cell = random.Random(str(seed)).choice(remaining)
+    for (_, exp), arm in zip(exps, cell):
+        variant[exp['factor']] = arm
+    return variant, ids
+
+
+def apply_variant(story, variant):
+    """
+    Strip what the variant does not show: overlay 'off' keeps the header only
+    (the A2 template keeps its context card, which stands in for the header).
+    """
+    if variant.get('overlay') == 'off':
+        story['closing_line'] = None
+        story['annotations'] = []
+        if variant.get('template') != 'A2':
+            story['context_line'] = None
+    return story

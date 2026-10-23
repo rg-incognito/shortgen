@@ -44,8 +44,32 @@ _LEAD_PAD        = 0.10   # breath kept before the first word
 _TAIL_HOLD       = 0.5    # let the last word's tone finish, never into the next word
 _SNAP_MAX        = 6.0    # how far a cut may move to reach a whole-sentence boundary
 
-TARGET_SECONDS = (15, 30)   # retention sweet spot; profiles hold the hard limits
+TARGET_SECONDS = (15, 30)   # default sweet spot; profiles pick a per-niche target (campaigns.NICHE_LENGTH)
 N_CANDIDATES   = (3, 5)
+
+# 0-3 s hook classes (virality spec section 2). The LLM labels its own opening;
+# SL (slow, low-stakes setup) opened 13 of the 16 mature corpus flops.
+HOOK_CLASSES = {
+    'AV': 'absurd or striking visual in frame 1',
+    'BC': 'bold claim or stake stated in the first 3 seconds',
+    'MA': 'drops in mid-action or mid-conflict',
+    'Q':  'a question the viewer wants answered',
+    'CN': 'two famous names colliding unexpectedly',
+    'ST': 'a first-person story opener from a known person (podcast/talk)',
+    'SL': 'slow, low-stakes setup: introductions, greetings, exposition, an opinion premise',
+}
+HOOK_POINTS     = {'AV': 2, 'BC': 2, 'MA': 2, 'Q': 2, 'CN': 2, 'ST': 1, 'SL': 0}
+RUBRIC_LLM_KEYS = ('stake', 'payoff', 'emotion', 'framing', 'originality')
+RUBRIC_GATE     = 11       # of 16: corpus virals scored 11-15, mature flops 4-9
+PAYOFF_MAX_TAIL = 3.0      # end within 3 s of the payoff so the clip loops on it
+LATER_START_MAX = 10.0     # how far a setup opener may be skipped to reach a question or conflict line
+# Openers that drop the viewer into a conflict ("No!", "Don't wink at me", "Hey, Bozo").
+_CONFLICT_LINE = re.compile(
+    r"^\W*(no\b|stop\b|don'?t\b|hey\b|what the\b|get out\b|how could\b|"
+    r"you (lied|did|said|never|ate|took|kissed|slept)\b)", re.IGNORECASE)
+# Which originality layer each genre gets (virality spec section 8).
+GENRES = {'friends': 'sitcom', 'loveisblind': 'reality', 'loveandjustice': 'reality',
+          'markmanson': 'podcast', 'unpacked': 'talk', 'youngla': 'talk'}
 
 # First words that make a scrolling viewer leave: filler, connectives, setup.
 FILLER_OPENERS = {'so', 'um', 'umm', 'uh', 'uhh', 'er', 'erm', 'hmm', 'mm', 'mhm', 'okay', 'ok',
@@ -186,6 +210,21 @@ def build_candidate(raw, sents, words):
     if not clips:
         return None, ['no clips']
 
+    problems = []
+    # End on the payoff: trailing lines after the punchline only dilute the loop.
+    payoff_k = ranges[-1][1]
+    try:
+        k = _sid(raw['payoff_sentence']) if raw.get('payoff_sentence') not in (None, '') else None
+    except (AttributeError, TypeError, ValueError):
+        k = None
+    if k is not None and any(a <= k <= b for a, b in ranges):
+        payoff_k = k
+        last_a, last_b = ranges[-1]
+        if (last_a <= k < last_b and sents[k]['complete']
+                and sents[last_b]['end'] - sents[k]['end'] > PAYOFF_MAX_TAIL):
+            ranges[-1] = (last_a, k)
+            clips[-1]['end_seconds'] = clip_times(sents, words, last_a, k)[1]
+
     story = dict(raw)
     story['clips'] = clips
     story['_sentences'] = ranges
@@ -194,12 +233,103 @@ def build_candidate(raw, sents, words):
     # The real first/last lines (not the LLM's quote) drive the hook and spoiler checks.
     story['opening_line'] = sents[ranges[0][0]]['text']
     story['payoff_line'] = sents[ranges[-1][1]]['text']
+    story['_payoff_text'] = sents[payoff_k]['text']
     story['_total_seconds'] = round(sum(c['end_seconds'] - c['start_seconds'] for c in clips), 1)
-    problems = [f'missing {k}' for k in ('storyline_title', 'storyline_summary', 'hook_text')
-                if not story.get(k)]
+
+    # Contract fields for the renderer (episode seconds).
+    p_end = words[sents[payoff_k]['w1']]['end'] if sents[payoff_k]['w1'] is not None else sents[payoff_k]['end']
+    story['payoff_t'] = round(float(p_end), 3)
+    end_t = sents[ranges[-1][1]]['end']
+    p_off, e_off = story_offset(clips, story['payoff_t']), story_offset(clips, end_t)
+    story['_payoff_tail'] = round(e_off - p_off, 2) if p_off is not None and e_off is not None else 0.0
+    story['_payoff_pos'] = round(p_off / story['_total_seconds'], 2) if p_off and story['_total_seconds'] else 1.0
+    # A v2 answer carries hook_class; older-shape answers keep the Oct 22 checks only.
+    story['_v2'] = 'hook_class' in raw
+    story['hook_class'] = str(raw.get('hook_class') or '').strip().upper() or None
+    story['header'] = re.sub(r'\s+', ' ', str(raw.get('header') or raw.get('hook_text') or '')).strip()
+    if story['header']:
+        story['hook_text'] = story['header']   # the current banner path reads hook_text
+    story['reveal'] = str(raw.get('reveal') or '').strip()
+    for key in ('context_line', 'closing_line'):
+        story[key] = re.sub(r'\s+', ' ', str(raw.get(key) or '')).strip() or None
+    story['annotations'] = _annotations(raw.get('annotations'), sents, clips)
+    story['single_story_arc'] = raw.get('single_story_arc') in (True, 'true', 'True', 1)
+
+    problems += [f'missing {k}' for k in ('storyline_title', 'storyline_summary', 'header')
+                 if not story.get(k)]
     story.setdefault('storyline_title', 'untitled')
     story.setdefault('storyline_summary', '')
     return story, problems
+
+
+def story_offset(clips, t):
+    """Seconds into the (untrimmed) story at which episode time t plays, or None if t is cut out."""
+    off = 0.0
+    for c in clips:
+        if c['start_seconds'] - 0.01 <= t <= c['end_seconds'] + 0.01:
+            return off + max(0.0, t - c['start_seconds'])
+        off += c['end_seconds'] - c['start_seconds']
+    return None
+
+
+def _annotations(raw, sents, clips, limit=3):
+    """[{'t': episode seconds, 'text': '*HE KNOWS*'}] for the LLM's stage directions that land inside the clips."""
+    out = []
+    for a in raw if isinstance(raw, list) else []:
+        if not isinstance(a, dict) or not str(a.get('text') or '').strip():
+            continue
+        try:
+            if a.get('sentence') not in (None, ''):
+                k = _sid(a['sentence'])
+                if not 0 <= k < len(sents):
+                    continue
+                t = sents[k]['start']
+            else:
+                t = float(a['t'])
+        except (AttributeError, KeyError, TypeError, ValueError):
+            continue
+        if story_offset(clips, t) is None:
+            continue
+        text = str(a['text']).strip().strip('*').strip()
+        out.append({'t': round(float(t), 3), 'text': f'*{text.upper()}*'})
+    return sorted(out, key=lambda x: x['t'])[:limit]
+
+
+def later_start(story, sents, words, max_shift=LATER_START_MAX):
+    """
+    The same story started on the first question or conflict line within
+    max_shift seconds of a setup opener (test1: skip the bill set-up, open on
+    "Joey, what are you doing?"). None if the first clip has no such line.
+    """
+    a, b = story['_sentences'][0]
+    for k in range(a + 1, b + 1):
+        s = sents[k]
+        if s['start'] - sents[a]['start'] > max_shift:
+            break
+        if not s['clean_start']:
+            continue
+        text = s['text'].strip()
+        bare = re.sub(r'["\')\]]+$', '', text)
+        cls = 'Q' if bare.endswith('?') else 'MA' if (bare.endswith('!') or _CONFLICT_LINE.search(text)) else None
+        if not cls:
+            continue
+        new = dict(story)
+        new['clips'] = [dict(c) for c in story['clips']]
+        new['clips'][0]['start_seconds'] = clip_times(sents, words, k, b)[0]
+        new['_sentences'] = [(k, b)] + list(story['_sentences'][1:])
+        new['opening_line'] = new['_llm_opening'] = text
+        new['_llm_start'] = k
+        new['hook_class'] = cls
+        new['_later_start'] = (a, k)
+        new['_total_seconds'] = round(sum(c['end_seconds'] - c['start_seconds'] for c in new['clips']), 1)
+        if new.get('_payoff_tail') is not None:
+            p_off = story_offset(new['clips'], new['payoff_t'])
+            if p_off is not None and new['_total_seconds']:
+                new['_payoff_pos'] = round(p_off / new['_total_seconds'], 2)
+        new['annotations'] = [x for x in story.get('annotations') or []
+                              if story_offset(new['clips'], x['t']) is not None]
+        return new
+    return None
 
 
 def _words_of(text):
@@ -271,13 +401,55 @@ def _num(v, default):
         return default
 
 
-def rank_score(story, dur):
-    """Weighted 0-10 score: the opening matters most, then the payoff."""
+def rank_score(story, dur, target=TARGET_SECONDS):
+    """
+    Weighted 0-10 score: the opening matters most, then the payoff. A story
+    with a rubric total (story['_rubric'], of 16) blends it in with weight 0.5
+    next to the 0.4/0.3/0.2/0.1 weights.
+    """
     base    = _num(story.get('score'), 5.0)
     hook    = _num(story.get('hook_strength'), base)
     payoff  = _num(story.get('payoff_strength'), base)
     clarity = _num(story.get('standalone_clarity'), base)
-    return round(0.4 * hook + 0.3 * payoff + 0.2 * clarity + 0.1 * length_fit(dur), 2)
+    score = 0.4 * hook + 0.3 * payoff + 0.2 * clarity + 0.1 * length_fit(dur, target)
+    if story.get('_rubric') is not None:
+        score = (score + 0.5 * story['_rubric'] / 16 * 10) / 1.5
+    return round(score, 2)
+
+
+def _pt(v):
+    try:
+        return int(min(2, max(0, round(float(v)))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def rubric_points(story, dur, framing_cap=2, originality_cap=2, long_arc=False):
+    """
+    The 8-criterion rubric (virality spec section 4, 0-2 each, max 16). Code
+    scores hook (from hook_class), length (edited seconds) and title (the
+    title rules hard-ban vague templates, so a title that ships earns 2); the
+    LLM scores stake, payoff, emotion, framing and originality, capped by what
+    this campaign can actually put on screen (framing_cap / originality_cap).
+    """
+    llm = story.get('rubric') if isinstance(story.get('rubric'), dict) else {}
+    if dur <= 25:
+        length = 2 if dur >= 12 else 1
+    elif dur <= 35:
+        length = 1
+    else:
+        length = 1 if long_arc else 0
+    pts = {
+        'hook':        HOOK_POINTS.get(story.get('hook_class') or '', 0),
+        'stake':       _pt(llm.get('stake')),
+        'payoff':      _pt(llm.get('payoff')),
+        'length':      length,
+        'emotion':     _pt(llm.get('emotion')),
+        'framing':     min(_pt(llm.get('framing')), framing_cap),
+        'originality': min(_pt(llm.get('originality')), originality_cap),
+        'title':       2,
+    }
+    return sum(pts.values()), pts
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +476,7 @@ Default to "standalone_scene" when a single scene is strong enough on its own �
 Great storylines/moments to look for — RANKED BY VIRAL POTENTIAL:
 TIER 1 (highest views — pick these first):
 1. A romantic revelation or confession — Ross telling Rachel he loves her, Chandler proposing to Monica, any "I've always loved you" moment
-2. A plot twist or secret exposed — someone finds out something that changes everything, a lie finally unravels in front of everyone
+2. A plot twist — someone finds out what a friend has been hiding, a lie finally unravels in front of everyone
 3. An emotional moment that also lands funny — a character being vulnerable then immediately undercut by a joke
 4. A relationship turning point — first kiss, breakup, getting back together, a jealousy moment with a great reaction shot
 
@@ -329,7 +501,7 @@ Rules:
 - Pick moments with a clear spoken punchline or strong visual reaction
 - storyline_title: snake_case, max 40 chars
 - series_tag: pick exactly one — ross_being_ross | joey_being_joey | chandler_being_chandler | phoebe_being_phoebe | monica_being_monica | rachel_being_rachel | relationship_drama | gang_together
-- hook_text: 3-8 words, ALL CAPS, an open question or tension about the moment that does NOT give away the punchline (e.g. "SHE DID WHAT TO HER CLIENT?", "ROSS SAYS THE WRONG NAME", "HE WAS NOT SUPPOSED TO HEAR THIS"). This is burned onto the video as a persistent white banner across the top of the ENTIRE video, so a spoiler is visible from the first frame. Still separate from and shorter than the YouTube title.
+- header: 4-9 words, ALL CAPS, names a character and states the SITUATION or your STANCE on it, never the punchline (e.g. "JOEY CAN'T PAY HIS CENTRAL PERK TAB", "MONICA WAS 100% RIGHT HERE", "ROSS IS ABOUT TO SAY THE WRONG NAME"). It is on screen from the first frame for the ENTIRE video, so a spoiler is visible before the joke lands. Still separate from and shorter than the YouTube title.
 - hook_emoji: 1-2 emoji matching the COMEDIC reaction to this specific moment (e.g. 😳 😂 💀 🤦 😬 😏 👀 🙈 — pick whatever actually fits the clip's humor, don't default to the same one or two every time), or "" if none fit naturally — never force one"""
 
 
@@ -364,7 +536,7 @@ _LIB_PROMPT = """You are a short-form video editor clipping Netflix's dating rea
 Find the best standalone moments in this episode for a vertical YouTube Short.
 
 WHAT WORKS (ranked):
-1. Drama or a plot twist — a confession, a secret coming out, a fight in the pods, an unexpected answer, a cliffhanger line
+1. Drama or a plot twist — a confession, a hidden past coming out, a fight in the pods, an answer nobody planned for, a cliffhanger line
 2. Real, raw conversation between cast members — a vulnerable admission, a hard question, a moment of chemistry
 3. Sweet or funny moments — a proposal, a first reaction, a laugh that lands, an awkward beat played for comedy
 
@@ -386,7 +558,7 @@ Transcript, one numbered sentence per line (format: S<number> [start_sec-end_sec
 Field rules:
 - storyline_title: snake_case, max 40 chars
 - series_tag: always "love_is_blind"
-- hook_text: 3-8 words, ALL CAPS, teases the moment WITHOUT spoiling the payoff. Neutral or warm — NEVER insulting a cast member (no "crazy", "psycho", "delusional", "toxic", etc.) and nothing sexual. Do not name any other show or streaming service. It is burned onto the video as a banner for the whole clip.
+- header: 4-9 words, ALL CAPS, names a cast member and states the situation, WITHOUT spoiling the payoff. Neutral or warm — NEVER insulting a cast member (no "crazy", "psycho", "delusional", "toxic", etc.) and nothing sexual. Do not name any other show or streaming service. It is burned onto the video for the whole clip.
 - hook_emoji: 1-2 emoji that fit the moment (😳 😭 👀 🥹 😬 💍 ❤️ …) or "" if none fit"""
 
 
@@ -399,7 +571,7 @@ Summary  : {summary}
 Return ONLY valid JSON, no markdown:
 {{
   "title": "Love Is Blind: she did not see that question coming 😳",
-  "description": "One question in the pods and the whole date changed.\\nWould you have stayed after hearing that?\\n\\nLove Is Blind Season 11 is streaming now on Netflix.\\n\\n#LoveIsBlind #LoveIsBlindNetflix #Netflix",
+  "description": "One question in the pods and the date went quiet.\\nWould you have stayed after hearing his answer?\\n\\nLove Is Blind Season 11 is streaming now on Netflix.\\n\\n#LoveIsBlind #LoveIsBlindNetflix #Netflix",
   "tags": "Love Is Blind, Love Is Blind Netflix, Love Is Blind Season 11, Netflix, the pods",
   "pinned_comment": "Would you have said yes after that? 👇"
 }}
@@ -444,7 +616,7 @@ Transcript, one numbered sentence per line (format: S<number> [start_sec-end_sec
 Field rules:
 - storyline_title: snake_case, max 40 chars
 - series_tag: always "solved"
-- hook_text: 3-9 words, ALL CAPS, states the question the clip answers (not the answer) — accurate to what Mark actually says, not clickbait. Burned onto the video as a banner for the whole clip.
+- header: 4-9 words, ALL CAPS, states the question the clip answers (not the answer) — accurate to what Mark actually says, not clickbait. Burned onto the video for the whole clip.
 - hook_emoji: usually "" for this show; at most one subtle emoji if it really fits"""
 
 
@@ -489,7 +661,7 @@ _HS_FIELD_RULES = """
 Field rules:
 - storyline_title: snake_case, max 40 chars
 - series_tag: always "{tag}"
-- hook_text: 3-8 words, ALL CAPS, teases the moment without spoiling the payoff, accurate to what happens — no lying clickbait. Never mention FaZe or any other channel. Burned onto the video as a banner for the whole clip.
+- header: 4-9 words, ALL CAPS, names who is in it and states the situation without spoiling the payoff, accurate to what happens — no lying clickbait. Never mention FaZe or any other channel. Burned onto the video for the whole clip.
 - hook_emoji: 1-2 emoji that fit the moment or "" if none fit"""
 
 _LJ_PROMPT = """You are a short-form video editor clipping "Love & Justice", Zach Justice's relationship show on the HardScope YouTube channel, for an official brand-approved clipping campaign. Real couples bring one relationship issue to Zach, he hears both sides and delivers a verdict on who is at fault.
@@ -583,7 +755,7 @@ Transcript, one numbered sentence per line (format: S<number> [start_sec-end_sec
 Field rules:
 - storyline_title: snake_case, max 40 chars
 - series_tag: always "gym"
-- hook_text: 3-8 words, ALL CAPS, funny/curious, accurate to the moment. NEVER mention any brand, store or clothing. Burned onto the video as a banner for the whole clip.
+- header: 4-9 words, ALL CAPS, names who is in it, funny and accurate to the moment. NEVER mention any brand, store or clothing. Burned onto the video for the whole clip.
 - hook_emoji: 1-2 emoji that fit (😭 💀 😂 🤯 💪) or \"\""""
 
 _YLA_YT_PROMPT = """You write YouTube Shorts metadata for a funny gym/bodybuilder clip. It must read like a fan posting, never like an ad.
@@ -617,60 +789,114 @@ _PROMPTS = {
 }
 
 # Shape example per campaign. Sentence numbers are 0 placeholders: the model
-# once copied an example's real-looking timestamps (commit 28b18e2).
+# once copied an example's real-looking timestamps (commit 28b18e2). Headers
+# state the situation or a stance; none uses a vague template word.
 _EXAMPLES = {
-    'friends': ('standalone_scene', 'phoebe_bites_massage_client',
-                'Phoebe bites her client mid-massage and tries to play it off', 'phoebe_being_phoebe',
-                'SHE DID WHAT TO HER CLIENT?', '😳', 'scene',
-                'Phoebe snaps at the client and the room freezes'),
-    'loveisblind': ('standalone_scene', 'pods_secret_confession',
-                    'She admits something in the pods that changes how he sees her', 'love_is_blind',
-                    "SHE DIDN'T EXPECT THAT QUESTION", '😳', 'scene', 'His question and her stunned answer'),
+    'friends': ('standalone_scene', 'joey_dodges_central_perk_bill',
+                'Joey cannot pay his Central Perk tab and quietly starts working there', 'joey_being_joey',
+                "JOEY CAN'T PAY HIS CENTRAL PERK TAB", '', 'scene',
+                'Rachel catches Joey behind the counter', 'Q',
+                'Joey owes Central Perk a lot of money', 'Gunther knew the whole time 😭', None),
+    'loveisblind': ('standalone_scene', 'pods_hard_question_about_kids',
+                    'He asks the question she was dreading in the pods and her answer surprises him',
+                    'love_is_blind', "TAYLOR ASKS THE QUESTION SHE WAS DREADING", '😳', 'scene',
+                    'His question and her stunned answer', 'Q',
+                    'They have known each other for four days', 'Would you have answered first? 👀',
+                    'she knows'),
     'markmanson': ('standalone_scene', 'failure_is_the_tuition',
                    'Mark argues failure feels worse than it is because we treat it as identity', 'solved',
                    'WHY FAILURE HURTS MORE THAN IT SHOULD', '', 'scene',
-                   'Mark opens on the bold claim and lands the reframe'),
+                   'Mark opens on the bold claim and lands the reframe', 'BC',
+                   'Mark Manson on why one bad result feels personal', 'Is he right about failure?', None),
     'loveandjustice': ('standalone_scene', 'zach_rules_who_is_wrong',
                        'After hearing both sides, Zach tells the couple who is at fault', 'love_and_justice',
-                       'ZACH DID NOT HOLD BACK', '⚖️', 'scene', "Zach's verdict and the couple's reaction"),
+                       'ZACH HEARS BOTH SIDES OF THE PHONE FIGHT', '⚖️', 'scene',
+                       "Zach's verdict and the couple's reaction", 'MA',
+                       'She checked his phone while he slept', 'Who was wrong here? 👇', 'he knows'),
     'unpacked': ('standalone_scene', 'sixty_thousand_dollar_pull',
                  'The guest opens the pack and pulls the card everyone was hoping for', 'unpacked',
-                 'WAIT FOR THE LAST CARD', '🤯', 'scene', 'The pull and the reaction'),
+                 'STEVE AOKI OPENS A $60,000 PACK', '🤯', 'scene', 'The pull and the reaction', 'BC',
+                 'Steve Aoki has chased this card for years', 'Keep it or sell it?', None),
     'youngla': ('standalone_scene', 'bodybuilder_panics_in_escape_room',
                 'A huge bodybuilder completely loses it when the lights go out', 'gym',
-                'HE WAS NOT READY FOR THIS', '😭', 'scene', 'The lights go out and he panics'),
+                'A 250 POUND BODYBUILDER VS A DARK ESCAPE ROOM', '😭', 'scene',
+                'The lights go out and he panics', 'AV',
+                'Strongest guy in the room, scared of the dark', 'Would you last longer than him? 😭', None),
 }
+
+_LAYER_RULES = {
+    'sitcom': ('Primary layer for a sitcom: the header is your STANCE or the situation, and closing_line is your '
+               'verdict or a question for the viewer (e.g. "Gunther knew the whole time", "Team Ross or Team '
+               'Rachel?"). Also give context_line: one line of pre-context a stranger needs (e.g. "Ross has been '
+               'lying about this for 3 seasons"); some uploads show it instead of the header. annotations: [].'),
+    'reality': ('Primary layer for reality/drama: annotations, 1-3 stage directions in asterisks that interpret '
+                'the subtext of a silent or tense beat (e.g. "*she knows*", "*waiting for his answer*"), each tied '
+                'to the S-number it appears on, plus closing_line (a verdict or a question). Also give context_line '
+                '(one line of pre-context).'),
+    'podcast': ('Primary layer for a podcast/talk clip: context_line, who is speaking and what is at stake in one '
+                'line (shown 0-2.5 s), plus closing_line (a question that invites a take). annotations: [].'),
+}
+_LAYER_RULES['drama'] = _LAYER_RULES['reality']
+_LAYER_RULES['talk'] = _LAYER_RULES['podcast']
 
 
 def _example_json(campaign):
-    fmt, title, summary, tag, hook, emoji, label, desc = _EXAMPLES.get(campaign, _EXAMPLES['friends'])
+    (fmt, title, summary, tag, hook, emoji, label, desc, hook_class, context, closing,
+     note) = _EXAMPLES.get(campaign, _EXAMPLES['friends'])
     cand = {
         'format': fmt, 'storyline_title': title, 'storyline_summary': summary, 'series_tag': tag,
-        'hook_text': hook, 'hook_emoji': emoji,
+        'hook_class': hook_class,
         'opening_line': '<first sentence of the first clip, verbatim>',
         'payoff_line': '<last sentence of the last clip, verbatim>',
+        'payoff_sentence': 0,
+        'header': hook, 'hook_emoji': emoji,
+        'reveal': '<what the ending reveals, in plain words>',
+        'context_line': context, 'closing_line': closing,
+        'annotations': [{'sentence': 0, 'text': f'*{note}*'}] if note else [],
+        'stake_line': '<the situation in 6-8 words: a person and a concrete noun or event>',
+        'emotion': 'laughter',
+        'single_story_arc': False,
         'clips': [{'start_sentence': 0, 'end_sentence': 0, 'label': label, 'description': desc}],
         'hook_strength': 8, 'payoff_strength': 8, 'standalone_clarity': 9,
+        'rubric': {'stake': 2, 'payoff': 2, 'emotion': 2, 'framing': 2, 'originality': 2},
     }
     return json.dumps({'candidates': [cand, '...2-4 more candidates in the same shape...']},
                       ensure_ascii=False, indent=2)
 
 
-def _answer_rules(campaign, limits):
+def _vague_rule():
+    from campaigns import VAGUE_ALWAYS, VAGUE_NEEDS_OBJECT
+    return (f'never use {", ".join(sorted(VAGUE_ALWAYS))}; never use {", ".join(sorted(VAGUE_NEEDS_OBJECT))} '
+            f'unless the concrete thing follows ("this sandwich" is fine, "he did this" is not)')
+
+
+def _answer_rules(campaign, limits, target=None, genre=None, recent_headers=None):
     lo, hi = limits
-    t_lo, t_hi = TARGET_SECONDS
+    t_lo, t_hi = target or TARGET_SECONDS
+    genre = genre or GENRES.get(campaign, 'sitcom')
+    hooks = '; '.join(f'{k} = {v}' for k, v in HOOK_CLASSES.items())
+    recent = '; '.join(f'"{h}"' for h in (recent_headers or [])[-30:]) or 'none yet'
+    long_arc = (' Up to 60s only when single_story_arc is true (one escalating first-person story by one speaker) '
+                'and the payoff is in the last 30%.' if genre in ('podcast', 'talk') else '')
     return f"""
 
 HOW TO PICK AND CUT (these rules override anything above):
 - Give {N_CANDIDATES[0]}-{N_CANDIDATES[1]} DIFFERENT candidate moments (different scenes or ideas, not variations of one), best first.
 - Cut by sentence number, never by seconds. Each clip runs from "start_sentence" to "end_sentence" (S-numbers from the transcript, inclusive); code turns them into exact cut times.
 - start_sentence must begin a thought, never a line that continues the one before it. end_sentence must be a COMPLETE sentence that finishes the beat (the punchline, answer, verdict or reaction line), never a line that trails off or carries on into the next line.
-- Length: aim for {t_lo}-{t_hi} seconds in total (use the timestamps). Never under {lo:.0f}s or over {hi:.0f}s. Shorter wins when the moment is complete: end right on the payoff.
+- Length: aim for {t_lo:.0f}-{t_hi:.0f} seconds in total (use the timestamps). Never under {lo:.0f}s or over {hi:.0f}s.{long_arc} Shorter wins when the moment is complete: end right on the payoff.
+- payoff_sentence: the S-number of the punchline, reveal or verdict. The clip must end at most 3 seconds after it.
 - The OPENING LINE is the hook. The first sentence of the first clip must stop a scrolling stranger on its own, with no context: an odd or bold claim, a direct question, an accusation or confession, or a line dropped into the middle of a tense moment. Speech starts in the first second.
-- Never open on filler ("so", "um", "uh", "okay", "well", "yeah", "and", "but", "like", "anyway", "alright"), a greeting, someone explaining or setting up what is about to happen, or a line that only makes sense after an earlier one. Cut the setup: the hook_text banner supplies the context.
+- hook_class: label what the first 3 seconds are, honestly: {hooks}. Never offer an SL candidate: start later, on the first question or conflict line.
+- Never open on filler ("so", "um", "uh", "okay", "well", "yeah", "and", "but", "like", "anyway", "alright"), a greeting, someone explaining or setting up what is about to happen, or a line that only makes sense after an earlier one. Cut the setup: the header supplies the context.
+- Pick a concrete situation with a specific stake (stake_line: a person and a concrete noun or event in 6-8 words), not an abstract idea or opinion. Emotion must be high-arousal (laughter, shock, cringe, outrage, tension, triumph) or wholesome WITH stakes. For drama and reality, prefer threat, stakes or a call-out over wholesome or low-stakes beats.
 - opening_line: the first sentence of the first clip, copied VERBATIM. payoff_line: the last sentence of the last clip, copied VERBATIM.
-- hook_text must tease, not tell: no words from the payoff_line, never the punchline itself.
+- header (replaces hook_text): at most 9 words, ALL CAPS, no emoji, names a person and states the SITUATION or a STANCE (a side, a verdict, a superlative), never the reveal or the punchline. No content word from payoff_line or reveal; {_vague_rule()}. Do not start with the same three words as a recent header: {recent}.
+- reveal: what the ending reveals, in plain words (only used to check the header does not give it away).
+- ORIGINALITY LAYER (YouTube demotes clips that add nothing original). {_LAYER_RULES.get(genre, _LAYER_RULES['sitcom'])}
+- header, context_line, closing_line and annotations are YOUR voice: an opinion, context or a question. Never quote or paraphrase the dialogue, never narrate what is on screen, never mock or insult anyone in the clip.
 - Score each candidate 1-10, honestly and harshly (an ordinary moment is a 5): hook_strength = would a stranger stop scrolling on the opening line alone; payoff_strength = does the ending land (laugh, reveal, verdict, reaction); standalone_clarity = does it make sense with zero context.
+- rubric, each 0-2, honestly: stake (2 = the situation fits in 6 words with a person and a concrete noun or event; 0 = abstract), payoff (2 = a clear reversal or punchline; 0 = none), emotion (2 = high-arousal; 1 = wholesome with stakes; 0 = mild or nostalgic), framing (2 = the header states a specific conflict or stance; 1 = generic; 0 = a vague tease), originality (2 = your lines add a stance, context or comparison that is not a description; 1 = annotations only; 0 = none).
 
 Return ONLY a valid JSON object, no markdown, no explanation. The example shows the SHAPE only: its sentence numbers, titles and lines are placeholders; use real S-numbers and wording from THIS transcript:
 {_example_json(campaign)}"""
@@ -684,9 +910,10 @@ def _title_rules(campaign, story, title_names, recent_titles):
     return f"""
 
 TITLE AND HASHTAG RULES (these override the example and rules above):
-- title: start with the real name US viewers search for, one of: {names}.{actor} Then the tease.
+- title: start with the real name US viewers search for, one of: {names}.{actor} Then the concrete situation: a person and a specific object or event (e.g. "Matt LeBlanc's Joey dodges his Central Perk bill").
 - title: under 60 characters, 1-2 emoji max and only at the end, no hashtags.
 - title: never start with "Wait", "Nobody", "No one", "POV", "When you" or "@", and never "did X really just say that".
+- title: {_vague_rule()}.
 - title and description must NOT give away the payoff. The clip opens on "{story.get('opening_line', '')}" and ends on "{story.get('payoff_line', '')}": tease the situation, never state the outcome or reuse the payoff's key words.
 - title: different wording AND structure from every one of these recent titles:
 {recent}
@@ -729,7 +956,7 @@ def generate_yt_metadata(story, episode_name, api_key, retries=3, campaign='frie
 
 
 def analyze_candidates(sents, api_key, used_segments=None, used_storylines=None, retries=5,
-                       campaign='friends', limits=(12, 40)):
+                       campaign='friends', limits=(12, 40), target=None, genre=None, recent_headers=None):
     """Ask Gemini for 3-5 candidate moments over the numbered sentences; returns the raw candidate dicts."""
     api_key = api_key.strip()
     used_str = (
@@ -744,7 +971,7 @@ def analyze_candidates(sents, api_key, used_segments=None, used_storylines=None,
         transcript=format_sentences(sents),
         used_segments=used_str,
         used_storylines=storylines_str,
-    ) + _answer_rules(campaign, limits)
+    ) + _answer_rules(campaign, limits, target=target, genre=genre, recent_headers=recent_headers)
 
     payload = {
         'contents': [{'parts': [{'text': prompt}]}],

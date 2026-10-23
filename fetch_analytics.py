@@ -4,6 +4,8 @@ YouTube Channel Analytics — fetch all video stats for "The One Where" channel.
 Usage:
     python fetch_analytics.py              # full report (table + CSV)
     python fetch_analytics.py --csv-only   # skip table, just write CSV
+    python fetch_analytics.py --snapshot [--dry-run] [--post-first-comments]
+                                           # 48 h / 7 d stats into the tracker sheet (experiment loop)
 
 Outputs:
     analytics_report.csv   — per-video metrics
@@ -150,6 +152,127 @@ def _get_analytics(analytics_svc, channel_id, start_date='2020-01-01'):
     return result
 
 
+# ── 48 h / 7 d snapshots into the tracker (experiment loop) ───────────────────
+
+_TIER1 = {'US', 'CA', 'GB', 'AU'}
+_ISO = '%Y-%m-%dT%H:%M:%SZ'
+SNAPSHOT_48H_MIN_AGE = 45          # hours; the primary metric is log(views at 48 h)
+SNAPSHOT_7D_MIN_AGE = 7 * 24 - 3
+FIRST_COMMENT_MAX_AGE = 48         # hours after publish; later than that a "first" comment is pointless
+
+
+def _video_window(analytics, channel_id, video_id, start, end):
+    """views / engagedViews / averageViewPercentage / averageViewDuration for one video and date range."""
+    for metrics in ('views,engagedViews,averageViewPercentage,averageViewDuration',
+                    'views,averageViewPercentage,averageViewDuration'):
+        try:
+            resp = analytics.reports().query(
+                ids=f'channel=={channel_id}', startDate=start, endDate=end,
+                metrics=metrics, filters=f'video=={video_id}',
+            ).execute()
+        except HttpError as e:
+            if 'engagedViews' in metrics and e.status_code == 400:
+                continue          # metric not available to this channel: fall back
+            print(f"  [Analytics API] {video_id}: {e.status_code} {e.reason}")
+            return {}
+        rows = resp.get('rows') or []
+        if not rows:
+            return {}
+        return dict(zip([c['name'] for c in resp.get('columnHeaders', [])], rows[0]))
+    return {}
+
+
+def _tier1_share(analytics, channel_id, video_id, start, end):
+    """Share of views from US+CA+GB+AU (the Whop payout guardrail), or '' if unknown."""
+    try:
+        resp = analytics.reports().query(
+            ids=f'channel=={channel_id}', startDate=start, endDate=end, metrics='views',
+            dimensions='country', filters=f'video=={video_id}', sort='-views', maxResults=250,
+        ).execute()
+    except HttpError as e:
+        print(f"  [Analytics API] country {video_id}: {e.status_code} {e.reason}")
+        return ''
+    rows = resp.get('rows') or []
+    total = sum(float(r[1]) for r in rows)
+    return round(sum(float(r[1]) for r in rows if r[0] in _TIER1) / total, 3) if total else ''
+
+
+def _window_fields(analytics, channel_id, video_id, published, days, suffix):
+    start = published.date().isoformat()
+    end = (published + timedelta(days=days)).date().isoformat()
+    an = _video_window(analytics, channel_id, video_id, start, end)
+    out = {f'avp_{suffix}': an.get('averageViewPercentage', '')}
+    if suffix == '48h':
+        out['avd_48h'] = an.get('averageViewDuration', '')
+        out['t1_share_48h'] = _tier1_share(analytics, channel_id, video_id, start, end)
+    views = float(an.get('views') or 0)
+    out[f'engaged_ratio_{suffix}'] = round(float(an['engagedViews']) / views, 3) if views and 'engagedViews' in an else ''
+    return out
+
+
+def snapshot(yt, analytics, channel_id, dry_run=False, post_first_comments=False, now=None):
+    """
+    Fill views_48h / views_7d (Data API viewCount snapshot) plus engaged
+    ratio, average view % and tier-1 share (Analytics API) into PostingTracker
+    for every uploaded Short that has reached that age and has no value yet.
+    A late run still records the snapshot, with its real age in stats_*_at.
+    With post_first_comments (and AUTO_FIRST_COMMENT=1) it also posts each
+    published Short's first_comment once.
+    """
+    sys.path.insert(0, str(Path(__file__).parent / 'src'))
+    from sheet_tracker import SheetTracker
+
+    tracker = SheetTracker(json.loads(os.environ['GOOGLE_SERVICE_ACCOUNT_JSON'].lstrip('﻿')),
+                           os.environ['SPREADSHEET_ID'].strip())
+    now = now or datetime.utcnow()
+    due = []   # (row_num, row, video_id, published, age_h)
+    for i, r in enumerate(tracker._posting_rows()):
+        if len(r) < 11 or not r[10] or not r[9]:
+            continue
+        try:
+            published = datetime.strptime(r[9], _ISO)
+        except ValueError:
+            continue
+        due.append((i + 2, r, r[10].rstrip('/').rsplit('/', 1)[-1], published,
+                    (now - published).total_seconds() / 3600))
+
+    need = [d for d in due if (d[4] >= SNAPSHOT_48H_MIN_AGE and not SheetTracker.extra(d[1], 'views_48h'))
+            or (d[4] >= SNAPSHOT_7D_MIN_AGE and not SheetTracker.extra(d[1], 'views_7d'))]
+    views = {vid: int(item.get('statistics', {}).get('viewCount', 0) or 0)
+             for vid, item in _get_video_details(yt, [d[2] for d in need]).items()} if need else {}
+    print(f"Snapshots due: {len(need)}")
+    stamp = now.strftime(_ISO)
+    for row_num, r, vid, published, age_h in need:
+        if vid not in views:
+            continue
+        fields = {}
+        if age_h >= SNAPSHOT_48H_MIN_AGE and not SheetTracker.extra(r, 'views_48h'):
+            fields.update(views_48h=views[vid], stats_48h_at=f'{stamp} ({age_h:.0f}h)',
+                          **_window_fields(analytics, channel_id, vid, published, 2, '48h'))
+        if age_h >= SNAPSHOT_7D_MIN_AGE and not SheetTracker.extra(r, 'views_7d'):
+            fields.update(views_7d=views[vid], stats_7d_at=f'{stamp} ({age_h:.0f}h)',
+                          **_window_fields(analytics, channel_id, vid, published, 7, '7d'))
+        print(f"  {vid} row {row_num} ({age_h:.0f}h): {fields}")
+        if not dry_run:
+            tracker.set_posting_fields(row_num, fields)
+
+    if post_first_comments:
+        from youtube_client import post_comment, first_comment_enabled
+        for row_num, r, vid, published, age_h in due:
+            text = SheetTracker.extra(r, 'first_comment')
+            if not text or SheetTracker.extra(r, 'first_comment_status') or not 0 <= age_h <= FIRST_COMMENT_MAX_AGE:
+                continue
+            if dry_run or not first_comment_enabled():
+                print(f"  would comment on {vid}: {text!r}")
+                continue
+            try:
+                status = f'posted {post_comment(vid, text)}'
+            except Exception as e:
+                status = f'error: {e}'[:200]
+            print(f"  first comment {vid}: {status}")
+            tracker.set_posting_fields(row_num, {'first_comment_status': status})
+
+
 # ── Formatting ────────────────────────────────────────────────────────────────
 
 def _fmt_num(n):
@@ -180,6 +303,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--setup', action='store_true', help='Re-run OAuth setup')
     parser.add_argument('--csv-only', action='store_true', help='Skip terminal table')
+    parser.add_argument('--snapshot', action='store_true',
+                        help='Write 48 h / 7 d stats into the PostingTracker sheet '
+                             '(needs GOOGLE_SERVICE_ACCOUNT_JSON and SPREADSHEET_ID)')
+    parser.add_argument('--dry-run', action='store_true', help='With --snapshot: print, write nothing')
+    parser.add_argument('--post-first-comments', action='store_true',
+                        help='With --snapshot: post each published Short\'s first_comment '
+                             '(also needs AUTO_FIRST_COMMENT=1; off by default)')
     args = parser.parse_args()
 
     if args.setup:
@@ -196,6 +326,9 @@ def main():
     print("Fetching channel info...")
     ch      = _get_channel(yt)
     ch_id   = ch['id']
+    if args.snapshot:
+        snapshot(yt, analytics, ch_id, dry_run=args.dry_run, post_first_comments=args.post_first_comments)
+        return
     ch_name = ch['snippet']['title']
     ch_stat = ch['statistics']
     uploads_pl = ch['contentDetails']['relatedPlaylists']['uploads']
