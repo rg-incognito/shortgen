@@ -394,7 +394,9 @@ _HEAD_STROKE   = 3
 _CARD_SIZE     = 56
 _CARD_MIN      = 44
 _CARD_MAX_W    = 900
-_CARD_Y        = {'A1': 400, 'A2': 560, 'B1': 560}   # card centre (A1: under the band)
+_CARD_Y_A1     = 400      # A1: card centre just under the headline band
+_CARD_GAP      = 110      # full-bleed: card top this far below the caption centre
+                          # (the eye line sits at ~y 540, so a card there covers the face)
 _CARD_END      = 2.5      # s
 _CLOSE_EM      = 60       # Montserrat ExtraBold Italic, em px (header look)
 _CLOSE_MIN_EM  = 44
@@ -717,7 +719,7 @@ def render_overlay_png(out_path, template, header=None, handle=None, handle_y=No
     return box
 
 
-def render_card_png(text, out_path, centre_y):
+def render_card_png(text, out_path, centre_y=None, top_y=None, max_bottom=_SAFE_BOTTOM - 10):
     """Context card: black Montserrat ExtraBold on a white rounded box (radius 24)."""
     text = " ".join(text.split())
     layer = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
@@ -733,7 +735,9 @@ def render_card_png(text, out_path, centre_y):
     pitch = int(size * 1.25)
     w = max(d.textlength(ln, font=font) for ln in lines)
     bw, bh = w + 80, pitch * len(lines) + 56 - (pitch - size)
-    x0, y0 = (_OUT_W - bw) / 2, centre_y - bh / 2
+    y0 = top_y if top_y is not None else centre_y - bh / 2
+    y0 = min(y0, max_bottom - bh)
+    x0 = (_OUT_W - bw) / 2
     d.rounded_rectangle([x0, y0, x0 + bw, y0 + bh], radius=24, fill=(255, 255, 255, 255))
     for k, ln in enumerate(lines):
         lw = d.textlength(ln, font=font)
@@ -801,7 +805,10 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
                 allowed.append(box)
         if ov.get('context'):
             p = os.path.join(work, 'card.png')
-            render_card_png(ov['context'], p, _CARD_Y.get(template, 560))
+            if template == 'A1':
+                render_card_png(ov['context'], p, centre_y=_CARD_Y_A1)
+            else:
+                render_card_png(ov['context'], p, top_y=cy + _CARD_GAP)
             pngs.append((p, min(_CARD_END, dur)))
 
         # closing line rides the tail hold; captions clear when it starts
