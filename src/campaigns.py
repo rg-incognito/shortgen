@@ -417,6 +417,7 @@ CAMPAIGNS = {
         # render keeps on screen start to end on B1 (the header band exists on A1 only).
         # handle_required keeps it through the QA safe re-encode; handle_size makes it legible.
         'render':          _render('B', overlays_allowed=True, handle='BILF Podcast', handle_required=True,
+                                   context_required=True,
                                    handle_size=44, names=['Mara', 'Suneera', 'Alli', 'Andrea', 'BILF']),
         # The text hook in the first 2 s is the context card.
         'required_layers': ['context_line'],

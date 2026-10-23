@@ -195,6 +195,7 @@ def _render_config(render, story, wide_fallback=False):
         # A brief-required label ("BILF Podcast" for the whole clip) is kept through the
         # QA safe re-encode, and may be drawn larger than a channel handle.
         'handle_required': bool(render.get('handle_required')),
+        'context_required': bool(render.get('context_required')),
         'handle_size': render.get('handle_size'),
         'tail_s': tail,
         'max_hold': _MAX_HOLD_A if niche == 'A' else max(tail, _MAX_HOLD_B),
@@ -670,6 +671,10 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
                                             else None),
                                 overlays={'header': (story.get('header') or story.get('hook_text'))
                                           if cfg['header'] else None,
+                                          # a brief-required text hook (BILF) stays: the card is
+                                          # clamped above the safe line, so it cannot cause the fail
+                                          'context': story.get('context_line') if cfg.get('context_required')
+                                          else None,
                                           'last_word_end': words_out[-1]['end'] if words_out else None})
             ctx.update(normalization_type=enc.get('normalization_type'), allowed_boxes=None,
                        caption_y=enc.get('caption_y'), safe_rerender=True)
