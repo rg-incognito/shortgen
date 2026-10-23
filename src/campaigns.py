@@ -319,13 +319,11 @@ CAMPAIGNS = {
         'files': [
             # The 16:9-ish (1440x1080) finale episode first: it is the story source the brief wants.
             ('1J8UxY4Qsc_U6szlpQhcxln9ghiLkuFsN', 'TONYSTOCK_EP4_FINALE'),
-            # Livestream/finale recap cuts: native 4K vertical (2160x3840), loud mix, probably
-            # alternate edits of the same material. Cut 2 is the shorter version, so it goes last.
-            ('1mUf4xEMpB9PYWweZZ2ZGxzCvZ202B8KA', 'TONYSTOCK_FINALE_RECAP1'),
-            ('1HoeF9bj5VPEiM7prx012-rIdCCupZrxz', 'TONYSTOCK_FINALE_RECAP3'),
-            ('1TKvwxoKA7LuTmiR8Pqry7UG_5NrDshXM', 'TONYSTOCK_FINALE_RECAP2'),
+            # The 4K vertical recap cuts (Drive 1mUf4x..., 1HoeF9..., 1TKvwx...) are left out: they
+            # are a rap song over montage footage with almost no speech, so no clip can be cut on
+            # whole sentences and every run on them would be a no-candidate skip.
         ],
-        # The finale runs under 2 minutes (~2-4 clips); the recaps are ~1.5 min each.
+        # The finale runs under 2 minutes (~2-4 clips).
         'max_runs':        3,
         'archive':         False,    # files belong to the brand's Drive
         'silence_thresh':  0.45,     # scripted comedy: keep the timing, cut only dead air
