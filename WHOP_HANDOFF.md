@@ -14,7 +14,13 @@ How the Whop Content Rewards setup works, what runs on its own, and what needs a
 
 | Campaign | Publish (ET) | UK time | Why | GitHub cron (UTC, ~3h early) | Local fallback (IST) |
 |---|---|---|---|---|---|
-| (none scheduled) | | | | | |
+| Mark Manson | 20:00 | 01:00 | US evening (self-improvement wind-down; US-evening slots seed a T1 audience) | `0 21 * * *` | none |
+| BILF Podcast | 20:30 | 01:30 | US evening; career/founder audience | `30 21 * * *` | none |
+
+Only the 22:30-04:30 UTC (US evening) window is allowed; `src/campaigns.py` enforces it. Since 2026-10-24 there is no
+"min payout reachable at 1K views" rule: campaigns are picked for viral potential. Ramp Tony Hawk FINALE (`tonyhawk`,
+22:00 ET) is built but not scheduled until a test run uploads; MilkXP Ep. 3 is joined but blocked (needs the Milk
+watermark overlay).
 
 Only campaigns whose minimum payout is reached at ~1,000 views are scheduled (our Shorts mostly plateau
 around 1K). Love is Blind (12:30 PM / 9:30 PM ET) was unscheduled on 2026-10-20: the campaign stopped

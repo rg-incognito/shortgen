@@ -1,10 +1,12 @@
 name: Generate Shorts
 
 on:
-  # No campaign is scheduled right now (see WHOP_HANDOFF.md). To schedule one, add a
-  # `schedule:` block: GitHub often starts scheduled runs 1-2+ hours late, so each cron
-  # starts ~3h before its campaign's publish slot (src/campaigns.py publish_slots_et,
-  # US Eastern) and the upload is scheduled to go public exactly at the slot.
+  # GitHub often starts scheduled runs 1-2+ hours late, so each cron starts ~3h before its
+  # campaign's publish slot (src/campaigns.py publish_slots_et, US Eastern) and the upload
+  # is scheduled to go public exactly at the slot (see WHOP_HANDOFF.md).
+  schedule:
+    - cron: '0 21 * * *'    # markmanson -> 20:00 ET
+    - cron: '30 21 * * *'   # bilf       -> 20:30 ET
   workflow_dispatch:
     inputs:
       campaign:
@@ -101,7 +103,7 @@ jobs:
           GH_TOKEN:                    ${{ github.token }}
           SPREADSHEET_ID:              '1d-GID8JCIrw89ygIKXfsyT9Fe0qtxxmsUaKORuDliOM'
           # Scheduled runs can't pass inputs, so the cron slot decides the campaign.
-          CAMPAIGN: ${{ github.event.inputs.campaign || (github.event.schedule == '0 8 * * *' && 'markmanson') || ((github.event.schedule == '30 13 * * *' || github.event.schedule == '30 22 * * *') && 'loveisblind') || (github.event.schedule == '0 15 * * *' && 'youngla') || (github.event.schedule == '0 17 * * *' && 'unpacked') || (github.event.schedule == '0 19 * * *' && 'loveandjustice') || 'loveisblind' }}
+          CAMPAIGN: ${{ github.event.inputs.campaign || (github.event.schedule == '0 21 * * *' && 'markmanson') || (github.event.schedule == '30 21 * * *' && 'bilf') || 'markmanson' }}
           VIDEO_FILE_ID:               ${{ github.event.inputs.video_file_id }}
           EPISODE_NAME:                ${{ github.event.inputs.episode_name }}
           WHISPER_MODEL:               ${{ github.event.inputs.whisper_model || 'medium' }}
