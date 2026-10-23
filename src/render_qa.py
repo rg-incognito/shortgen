@@ -121,7 +121,7 @@ def band_checks(path):
     row_std = stack.std(axis=2)
     lit = (row_mean > 30).mean(axis=1) > 0.3                # frame has picture (not a fade to black)
     # a bar is flat black across the whole row (a dark jacket is not)
-    black = (row_mean < 8) & (row_std < 1.2) & lit[:, None]
+    black = (row_mean < 3) & (row_std < 0.4) & lit[:, None]
     persist = black[:-1] & black[1:]                        # black in 2 consecutive samples (>= 0.5 s)
     bar_px = max((_runs(r) for r in persist), default=0) * scale
     # static band: rows that never change and are flat across the row

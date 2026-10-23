@@ -299,16 +299,20 @@ def _punch_plan(parts, words_out, payoff_out, crop_w, push_from):
     for s, e in stretches:
         t, level = s, 1.0
         while e - t > _SHOT_CAP_S:
-            ok = [(ct, pr) for ct, pr in cands
-                  if t + 1.0 <= ct <= t + _SHOT_CAP_S and ct <= e - 0.8 and ct >= _CALM_HOOK_S
-                  and ct - last >= _PUNCH_GAP_S
-                  and not (payoff_out is not None and payoff_out - 0.6 <= ct <= payoff_out + 0.05)
-                  and not (push_from is not None and ct > push_from + 0.01)]
-            if not ok:
+            valid = [(ct, pr) for ct, pr in cands
+                     if t + 1.0 <= ct <= e - 0.8 and ct >= _CALM_HOOK_S
+                     and ct - last >= _PUNCH_GAP_S
+                     and not (payoff_out is not None and payoff_out - 0.6 <= ct <= payoff_out + 0.05)
+                     and not (push_from is not None and ct > push_from + 0.01)]
+            ok = [c for c in valid if c[0] <= t + _SHOT_CAP_S]
+            if ok:
+                # prefer the back half of the window so one punch covers more of the stretch
+                late = [c for c in ok if c[0] >= t + _SHOT_CAP_S / 2] or ok
+                ct = max(late, key=lambda c: (c[1], c[0]))[0]
+            elif valid:
+                ct = min(valid)[0]          # no boundary inside 4 s: the first one after it
+            else:
                 break
-            # prefer the back half of the window so one punch covers more of the stretch
-            late = [c for c in ok if c[0] >= t + _SHOT_CAP_S / 2] or ok
-            ct = max(late, key=lambda c: (c[1], c[0]))[0]
             level = hi if level == 1.0 else 1.0
             toggles.append((round(ct, 3), level))
             last = t = ct
