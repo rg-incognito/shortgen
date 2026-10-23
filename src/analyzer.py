@@ -616,7 +616,7 @@ Transcript, one numbered sentence per line (format: S<number> [start_sec-end_sec
 Field rules:
 - storyline_title: snake_case, max 40 chars
 - series_tag: always "solved"
-- header: 4-9 words, ALL CAPS, states the question the clip answers (not the answer) — accurate to what Mark actually says, not clickbait. Burned onto the video for the whole clip.
+- header: 4-9 words, ALL CAPS, states the question the clip answers (not the answer) — accurate to what Mark actually says, not clickbait. Not shown on this campaign's video (kept for the logs), so keep it plain and accurate.
 - hook_emoji: usually "" for this show; at most one subtle emoji if it really fits"""
 
 
@@ -661,7 +661,7 @@ _HS_FIELD_RULES = """
 Field rules:
 - storyline_title: snake_case, max 40 chars
 - series_tag: always "{tag}"
-- header: 4-9 words, ALL CAPS, names who is in it and states the situation without spoiling the payoff, accurate to what happens — no lying clickbait. Never mention FaZe or any other channel. Burned onto the video for the whole clip.
+- header: 4-9 words, ALL CAPS, names who is in it and states the situation without spoiling the payoff, accurate to what happens — no lying clickbait. Never mention FaZe or any other channel. It may be shown on the video for the whole clip.
 - hook_emoji: 1-2 emoji that fit the moment or "" if none fit"""
 
 _LJ_PROMPT = """You are a short-form video editor clipping "Love & Justice", Zach Justice's relationship show on the HardScope YouTube channel, for an official brand-approved clipping campaign. Real couples bring one relationship issue to Zach, he hears both sides and delivers a verdict on who is at fault.
@@ -755,7 +755,7 @@ Transcript, one numbered sentence per line (format: S<number> [start_sec-end_sec
 Field rules:
 - storyline_title: snake_case, max 40 chars
 - series_tag: always "gym"
-- header: 4-9 words, ALL CAPS, names who is in it, funny and accurate to the moment. NEVER mention any brand, store or clothing. Burned onto the video for the whole clip.
+- header: 4-9 words, ALL CAPS, names who is in it, funny and accurate to the moment. NEVER mention any brand, store or clothing. Not shown on this campaign's video (kept for the logs).
 - hook_emoji: 1-2 emoji that fit (😭 💀 😂 🤯 💪) or \"\""""
 
 _YLA_YT_PROMPT = """You write YouTube Shorts metadata for a funny gym/bodybuilder clip. It must read like a fan posting, never like an ad.

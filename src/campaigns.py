@@ -163,6 +163,8 @@ CAMPAIGNS = {
         'publish_slots_et': ['20:00'],
         'title_names':     ['Mark Manson'],
         'genre':           'podcast',
+        # No on-screen text and ST openers (1 point): 8/12 reachable is the bar, not 11/16.
+        'min_rubric':      8,
         # Brief: full subtitles, Mark on screen in 5 s. Full-bleed, no added text.
         'render':          _render('B', caption_preset='full_subs', names=['Mark', 'Manson']),
         # Big life questions are this show's topic, not a vague tease.
@@ -246,6 +248,7 @@ CAMPAIGNS = {
         'publish_slots_et': ['21:00'],
         'title_names':     ['Unpacked', 'MatCrackz', 'Steve Aoki', 'YourRAGE', 'HardScope'],
         'genre':           'talk',
+        'min_rubric':      8,       # no on-screen text: 8 of the 12 reachable points
         'render':          _render('B', names=['MatCrackz', 'Aoki', 'YourRAGE']),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/c85645f1-b75f-49e2-91d5-988cf9b3fadb',
         # Each episode is its own Whop campaign; submitting to the wrong one is a ban.
@@ -291,6 +294,7 @@ CAMPAIGNS = {
         # Real names only, never the brand (the brief wants it to look organic).
         'title_names':     ['IShowSpeed', 'Jay Cutler', 'Phil Heath'],
         'genre':           'talk',
+        'min_rubric':      8,       # no on-screen text: 8 of the 12 reachable points
         # Brief: must look organic: no @, no brand, no added text beyond captions.
         'render':          _render('B', names=['IShowSpeed', 'Speed', 'Cutler', 'Heath']),
         # No required caption text: the brief wants it to look organic, not branded.
@@ -768,17 +772,22 @@ def story_max_seconds(story, profile):
 
 
 def layer_caps(profile):
-    """(framing_cap, originality_cap): rubric points this campaign can earn with what it may show."""
+    """
+    (framing_cap, originality_cap): rubric points this campaign can earn with
+    what it may show. Framing needs any on-screen text (header or overlays);
+    originality needs the overlay lines, which only overlays_allowed renders.
+    """
     render = render_config(profile)
     shows_text = bool(render.get('header') or render.get('overlays_allowed'))
-    return (2 if shows_text else 0), (2 if shows_text else 0)
+    return (2 if shows_text else 0), (2 if render.get('overlays_allowed') else 0)
 
 
 def rubric_gate(profile, base=11):
     """
     Minimum rubric total (of 16). A campaign that may not show framing or
     originality text cannot earn those 4 points, so its gate scales with
-    what is reachable (11/16 of 12 -> 9). A profile can set min_rubric.
+    what is reachable (11/16 of 14 -> 10). A profile can set min_rubric
+    (the podcast/talk profiles use 8: their story openers score ST = 1).
     """
     if profile.get('min_rubric') is not None:
         return profile['min_rubric']

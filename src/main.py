@@ -44,6 +44,12 @@ MAX_CONSECUTIVE_SKIPS = 3
 
 class WeakMomentSkip(Exception):
     """The best moment that passed every check still scored under MIN_SCORE."""
+    kind = 'score gate'
+
+
+class NoCandidateSkip(WeakMomentSkip, RuntimeError):
+    """No candidate passed the campaign rules (recorded like a skip; still a RuntimeError)."""
+    kind = 'no candidate passed'
 
 
 def _sha1(path):
@@ -127,7 +133,9 @@ def _apply_layers(story, all_words, profile):
     bad = overlay_checks(story, all_words, profile)
     problems = []
     if 'header' in bad:
-        problems.append(f"header echoes the dialogue ({bad.pop('header')})")
+        why = bad.pop('header')
+        if render_config(profile).get('header'):   # only matters when it is on screen
+            problems.append(f"header echoes the dialogue ({why})")
     for field, why in bad.items():
         print(f"      ~ {story.get('storyline_title', '?')}: dropped {field} ({why})")
     for field in ('context_line', 'closing_line'):
@@ -173,7 +181,13 @@ def _candidate_problems(story, sents, all_words, used, profile, video_path=None,
     # Code-side dedupe: the LLM is told the used segments but not trusted with them.
     problems += overlap_problems(story['clips'], used)
     # The header is read in frame 0: no vague tease, no payoff word, no banned term, no reused opener.
-    problems += header_problems(story, profile, prior_headers)
+    # A campaign that shows no header only keeps the banned-term check (the text still feeds titles/logs).
+    if render_config(profile).get('header'):
+        problems += header_problems(story, profile, prior_headers)
+    else:
+        banned = find_banned(story.get('header') or '', profile)
+        if banned:
+            problems.append(f"header uses banned words {banned}")
     ad_hits = find_transcript_banned(story, all_words, profile)
     if ad_hits:
         problems.append(f"clip audio looks like an ad read {ad_hits}")
@@ -218,6 +232,8 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
             if not story:
                 print(f"      - unusable candidate {raw.get('storyline_title', '?')}: {'; '.join(problems)}")
                 continue
+            if not render_config(profile).get('header'):
+                problems = [p for p in problems if p != 'missing header']
             if story['_v2'] and (story.get('hook_class') == 'SL' or hook_problems(story, sents, all_words)):
                 alt = later_start(story, sents, all_words)
                 if alt and not hook_problems(alt, sents, all_words):
@@ -265,7 +281,12 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
         err.segments = [seg for seg in avoid if seg not in used_segments]
         err.score = best_weak['score']
         raise err
-    raise RuntimeError(f"No moment met the {campaign} campaign rules after {attempts} attempts")
+    # Nothing passed: record it like a score-gate skip (offered segments marked used, the
+    # 3-in-a-row alarm still fires) so the next run does not repeat the same work.
+    err = NoCandidateSkip(f"No moment met the {campaign} campaign rules after {attempts} attempts")
+    err.segments = [seg for seg in avoid if seg not in used_segments]
+    err.score = 0
+    raise err
 
 
 def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior_titles=(), attempts=4):
@@ -277,7 +298,7 @@ def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior
     """
     all_titles = [t for _, t in prior_titles]
     campaign_titles = [t for ep, t in prior_titles if episode_campaign(ep) == campaign]
-    fallback = None
+    fallback = vague_fallback = None
     for attempt in range(1, attempts + 1):
         yt_meta = generate_yt_metadata(story, episode_name, gemini_api_key, campaign=campaign,
                                        title_names=profile.get('title_names'),
@@ -296,9 +317,17 @@ def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior
         print(f"      Metadata attempt {attempt} rejected ({yt_meta['title']!r}): {'; '.join(hard + soft)}")
         if not hard and not fallback:
             fallback = yt_meta
+        # Metadata runs after the render: a title whose only hard issue is a vague word
+        # is a last resort rather than a reason to throw the render away.
+        if hard and all(h.startswith('vague words') for h in hard) and not vague_fallback:
+            vague_fallback = yt_meta
     if fallback:
         print(f"      Using {fallback['title']!r} despite soft title issues")
         return clean_hashtags(enforce_caption(fallback, profile), profile)
+    if vague_fallback:
+        print(f"::warning title=Vague title::{episode_name}: using {vague_fallback['title']!r} "
+              f"(every attempt used a vague word)")
+        return clean_hashtags(enforce_caption(vague_fallback, profile), profile)
     if not yt_meta:
         return None
     raise RuntimeError(f"Could not generate {campaign} metadata that passes the title rules")
@@ -463,6 +492,11 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
         if qa:
             print(f"      Render QA: {_qa_fields(qa)}")
         if not _qa_burned_text(qa):
+            other = [f for f in (qa or {}).get('hard_fail') or []]
+            if other:
+                # Uploaded anyway while QA is new (a false positive must not stop uploads).
+                print(f"::warning title=Render QA::{episode_name} '{story['storyline_title']}' "
+                      f"uploads with QA hard fails: {'; '.join(map(str, other))}")
             return story, short_path, qa
         rejected += [(c['start_seconds'], c['end_seconds']) for c in story['clips']]
         print(f"      Render QA found burned-in text in '{story['storyline_title']}' — "
@@ -672,7 +706,8 @@ def main():
                 tracker.log_story_fields(episode_name, current_run, story['storyline_title'],
                                          dict(_story_fields(story, first_comment), **_qa_fields(qa)))
             except Exception as e:
-                print(f"      Tracker packaging/QA fields skipped: {e}")
+                print(f"::warning title=Tracker fields not written::{episode_name} run {current_run}: "
+                      f"header/variant/QA columns skipped ({e})")
             from youtube_client import upload_scheduled, add_to_playlist
             # Profiles without slots publish ASAP, but still only in the US-evening window.
             publish_at = (next_publish_time(profile, slot=pinned_slot)

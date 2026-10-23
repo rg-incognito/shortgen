@@ -202,8 +202,34 @@ class SheetTracker:
         i = _EXTRA_FIRST + EXTRA_HEADERS.index(name)
         return row[i] if len(row) > i else ''
 
+    def _ensure_posting_columns(self):
+        """
+        Widen PostingTracker to column _LAST_COL if needed (once per tracker):
+        a new sheet has 26 columns (A..Z) and writes past the grid are rejected.
+        """
+        if getattr(self, '_columns_ok', False):
+            return
+        need = _EXTRA_FIRST + len(EXTRA_HEADERS)
+        meta = self._svc.spreadsheets().get(
+            spreadsheetId=self._sid, fields='sheets.properties',
+        ).execute(num_retries=5)
+        for s in meta.get('sheets', []):
+            props = s.get('properties', {})
+            if props.get('title') != _POSTING_SHEET:
+                continue
+            have = props.get('gridProperties', {}).get('columnCount', 26)
+            if have < need:
+                self._svc.spreadsheets().batchUpdate(
+                    spreadsheetId=self._sid,
+                    body={'requests': [{'appendDimension': {
+                        'sheetId': props['sheetId'], 'dimension': 'COLUMNS', 'length': need - have}}]},
+                ).execute(num_retries=5)
+                print(f"      PostingTracker widened from {have} to {need} columns")
+        self._columns_ok = True
+
     def set_posting_fields(self, row_num, fields):
         """Write {EXTRA_HEADERS name: value} into PostingTracker row row_num (1-based), adding headers once."""
+        self._ensure_posting_columns()
         head = self._svc.spreadsheets().values().get(
             spreadsheetId=self._sid, range=f'{_POSTING_SHEET}!{col_letter(_EXTRA_FIRST)}1:{_LAST_COL}1',
         ).execute(num_retries=5).get('values', [[]])
