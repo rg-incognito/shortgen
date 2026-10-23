@@ -323,8 +323,8 @@ CAMPAIGNS = {
             # are a rap song over montage footage with almost no speech, so no clip can be cut on
             # whole sentences and every run on them would be a no-candidate skip.
         ],
-        # The finale runs under 2 minutes (~2-4 clips).
-        'max_runs':        3,
+        # The finale runs under 2 minutes (~2-4 clips); two early runs were rule-failure skips.
+        'max_runs':        5,
         'archive':         False,    # files belong to the brand's Drive
         'silence_thresh':  0.45,     # scripted comedy: keep the timing, cut only dead air
         # The brief sets no minimum and the finale is 117 s of quick bits: a complete

@@ -411,10 +411,11 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
         err.segments = [seg for seg in avoid if seg not in used_segments]
         err.score = best_weak['score']
         raise err
-    # Nothing passed: record it like a score-gate skip (offered segments marked used, the
-    # 3-in-a-row alarm still fires) so the next run does not repeat the same work.
+    # Nothing passed: record the run so the 3-in-a-row alarm still fires, but leave the offered
+    # segments free. They failed a rule (length, header, missing layer...), not on quality, and
+    # marking them used burned a whole short source (the 117 s Tony Hawk finale) in one run.
     err = NoCandidateSkip(f"No moment met the {campaign} campaign rules after {attempts} attempts")
-    err.segments = [seg for seg in avoid if seg not in used_segments]
+    err.segments = []
     err.score = 0
     raise err
 
