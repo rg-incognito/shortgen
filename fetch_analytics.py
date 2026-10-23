@@ -258,7 +258,11 @@ def snapshot(yt, analytics, channel_id, dry_run=False, post_first_comments=False
 
     if post_first_comments:
         from youtube_client import post_comment, first_comment_enabled
+        from campaigns import CAMPAIGNS, comments_allowed, episode_campaign
         for row_num, r, vid, published, age_h in due:
+            # A brief that forbids commenting (milkxp) never gets one, whatever the row holds.
+            if not comments_allowed(CAMPAIGNS.get(episode_campaign(r[0]), {})):
+                continue
             text = SheetTracker.extra(r, 'first_comment')
             if not text or SheetTracker.extra(r, 'first_comment_status') or not 0 <= age_h <= FIRST_COMMENT_MAX_AGE:
                 continue

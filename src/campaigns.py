@@ -58,6 +58,66 @@ NICHE_LENGTH = {'A': {'target': (14, 25), 'max': 32}, 'B': {'target': (16, 30), 
 LONG_ARC_MAX = 60.0
 LONG_ARC_PAYOFF_POS = 0.70
 
+# --- milkXP (MilkPEP, a regulated milk brand) ---------------------------------
+# Creators in Episode 3 (from a local Whisper transcript, wm_build/cache/milkxp_ep3.mp4.txt): creator
+# Ben Azelart (Whisper: "Azalart") teams up with teacher Mr. Greg (the show's score card spells "Greg",
+# Whisper also "Gregg") to build a secret student lounge on a $5,000 budget (the 50/30/20 rule).
+# Single words for the caption highlight and the echo checks, full names for titles.
+_MILKXP_CREATORS = ['Ben Azelart', 'Mr. Greg']
+_MILKXP_CAST = ['Ben', 'Azelart', 'Greg', 'Gregg']
+
+# Other drinks (the brief: no oat/almond/soy/coconut/rice/nut milk, raw milk, juice, sports
+# drinks, AG1, Muscle Milk) and drink or milk brands (never named, never shown).
+_OTHER_DRINKS = [
+    r'\b(oat|almond|soy|coconut|rice|cashew|nut|hemp|pea|plant[- ]based|raw)[- ]?milks?\b',
+    r'\bjuices?\b', r'\bsports? drinks?\b', r'\benergy drinks?\b', r'\bsodas?\b', r'\bprotein shakes?\b',
+    r'\bsmoothies?\b', r'\bcoffee\b', r'\blattes?\b', r'\bbeers?\b', r'\bwine\b', r'\balcohol', r'\bcocktails?\b',
+    r'\bvodka\b', r'\bwhiske?y\b', r'\btequila\b',
+]
+_DRINK_BRANDS = [
+    r'\bag1\b', r'athletic greens', r'muscle ?milk', r'\bgatorade\b', r'\bpowerade\b', r'\bprime (hydration|energy|drink)',
+    r'\bred ?bull\b', r'\bmonster energy\b', r'\bcelsius\b', r'\bcoca[- ]?cola\b', r'\bcoke\b', r'\bpepsi\b',
+    r'\bsprite\b', r'\bfanta\b', r'\bdr\.? ?pepper\b', r'\bmountain dew\b', r'\bstarbucks\b', r'\bdunkin',
+    r'\bliquid death\b', r'\bbody ?armou?r\b', r'\bfairlife\b', r'\bhorizon organic\b', r'\borganic valley\b',
+    r'\blactaid\b', r'\bnesquik\b', r'\bcore power\b', r'\boatly\b', r'\bchobani\b', r'\bdarigold\b',
+    r'\btillamook\b', r'\bkemps\b', r'\bborden\b', r'\ba2 milk\b', r'\bnestl[eé]\b', r'\bdanone\b', r'\byoo-?hoo\b',
+]
+_CLAIM_WORDS = r'(best|perfect|perfectly|ideal|greatest|healthy|healthier|healthiest)'
+_MILK_NEGATIVE = r'(gross|disgusting|nasty|hate|hated|sour|spoiled|expired|chunky|curdled|throw(ing)? up|puke|vomit)'
+_SWEARING = [r'\bf+u+c+k', r'motherf', r'\bsh[i*]t', r'\bbitch', r'\bcunt\b', r'\bdamn', r'\bhell\b',
+             r'\bass(hole)?\b', r'\bcrap\b', r'\bdick\b', r'\bpiss', r'\bbastard', r'\bwtf\b', r'\bnigg', r'\bfag',
+             r'\bretard',
+             # Whisper writes a bleeped swear as "f***" / "s***": still a swear for this brand
+             r'\w\*{2,}']
+# Caption, title, tags, header: no exaggerated claim word anywhere (milk is the topic of every
+# caption), nothing ad-like, no other drink or brand, no adult words, no negativity or sarcasm.
+_MILK_CAPTION_BANS = [
+    rf'\b{_CLAIM_WORDS}\b', r'\bgoat\b', r'\bsuperfood', r'\bnutritious\b', r'\bnutrients?\b', r'\bnourish',
+    r'\bvitamins?\b', r'\bcalcium\b', r'\bprotein\b', r'\bmiracle',
+    r'\bcures?\b', r'\bboosts?\b', r'\bstrong(er)? bones\b',
+    r'\bbuy\b', r'\bcheck (it |this |them )?out\b', r'\bshop\b', r'\bsponsor', r'#ad\b', r'\bpaid\b', r'\bpromo',
+    r'\bdiscount', r'\bcoupon', r'\buse code\b', r'link in', r'\bsign up\b', r'\bget yours\b',
+    r'\bavailable (at|in|now)\b', r'\border (now|today)\b', r'\bgrab (a|one|yours)\b', r'\bstores?\b',
+    *_OTHER_DRINKS, r'\btea\b', *_DRINK_BRANDS,
+    *_SWEARING, r'\baf\b', r'\bsex', r'\bnsfw\b', r'\bnaked\b',
+    r'\bgross\b', r'\bdisgusting\b', r'\bnasty\b', r'\bhate', r'\bworst\b', r'\bsucks?\b', r'\bcringe',
+    r'\bstupid\b', r'\bidiot', r'\bdumb\b', r'\bloser', r'\btrash\b', r'\bclown', r'\bterrible\b', r'\bawful\b',
+    r'\byuck\b', r'\bew+\b', r'\blactose\b', r'\bdairy[- ]free\b', r'\bspoiled\b', r'\bexpired\b', r'\bsour\b',
+    r'\bfake\b', r'\bscam\b', r'\bsarcas', r'\byeah right\b', r'\bclickbait\b',
+    r'\btrump\b', r'\bbiden\b', r'\bharris\b', r'\bdemocrat', r'\brepublican',
+]
+# Clip audio: a creator naming another drink or brand, a claim or a complaint about milk, or
+# swearing rules the moment out.
+_MILK_AUDIO_BANS = [
+    *_OTHER_DRINKS, *_DRINK_BRANDS, *_SWEARING,
+    rf'\bmilk\w*\W+(?:\w+\W+){{0,4}}?{_CLAIM_WORDS}\b', rf'\b{_CLAIM_WORDS}\W+(?:\w+\W+){{0,4}}?milk',
+    rf'\bmilk\w*\W+(?:\w+\W+){{0,4}}?{_MILK_NEGATIVE}\b', rf'\b{_MILK_NEGATIVE}\W+(?:\w+\W+){{0,4}}?milk',
+    r'\blactose\b', r'\bdairy[- ]free\b', r'\bsex', r'\bnaked\b',
+    # The episode's scripted sponsor read (213-245 s: "a quick break from our sponsor", "brought to
+    # you by", "13 essential nutrients"): an ad with nutrition claims, not a creator's own words.
+    r'\bsponsor', r'brought to you by', r'\bnutrients?\b', r'\bessential nutrient', r'\bvitamins?\b',
+]
+
 CAMPAIGNS = {
     'friends': {
         'source':          'drive_folder',
@@ -496,6 +556,133 @@ CAMPAIGNS = {
         ],
     },
 
+    # Whop: ClipUp Official — LADbible Entertainment: "Clip LADbible's episode with John Cena &
+    # Jessica Biel". The brief ("all in Notion") was never linked, so these are its stated
+    # defaults: that episode only; the LADbible watermark visible and uncropped on every clip;
+    # tag @ladbible in the caption; burned-in captions; 9:16; 15-60 s; no NSFW; the caption must
+    # match the clip and must not mislead. $1/1K views, max $300 per clip.
+    'ladbible': {
+        'source':       'release',
+        'release_tag':  'footage-ladbible',
+        'files': [
+            # YouTube -jNqG2Dx1t8 (LADbible Entertainment, 2026-10-16, 11 min): "John Cena & Jessica
+            # Biel Go Head to Head in the Ultimate Snack Wars: Showdown". The release asset drops the
+            # leading '-' of the id (a leading dash reads as a flag to gh).
+            ('ladbible_jNqG2Dx1t8', 'LADBIBLE_CENA_BIEL_SNACKWARS'),
+        ],
+        'max_runs':        5,
+        'archive':         False,
+        'silence_thresh':  0.6,
+        # Two people side by side at a table: show the whole shot when faces are small.
+        'wide_fallback':   True,
+        # Brief 15-60 s; our retention falls off past ~30 s (niche B caps a normal clip at 35 s).
+        'min_seconds':     15.0,
+        'target_seconds':  (18, 30),
+        'max_seconds':     35.0,
+        'playlist':        'John Cena & Jessica Biel',
+        # Celebrity entertainment, US late evening (free slot: 22:00 is tonyhawk).
+        'publish_slots_et': ['22:30'],
+        'title_names':     ['John Cena', 'Jessica Biel', 'LADbible'],
+        'cast_names':      ['John', 'Cena', 'Jessica', 'Biel', 'LADbible'],
+        # A celebrity sit-down / game with two talkers: the talk niche (B1 full-bleed, talk captions).
+        'genre':           'talk',
+        # No added on-screen text beyond captions and the required watermark: 8 of 12 reachable.
+        'min_rubric':      8,
+        'render':          _render('B', names=['John', 'Cena', 'Jessica', 'Biel'],
+                                   # Required on every frame, clear and uncropped: top of the frame,
+                                   # above the faces, away from captions and the Shorts UI.
+                                   watermark={'file': 'assets/watermarks/ladbible.png', 'width_frac': 0.5,
+                                              'pos': 'top'}),
+        'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/187d5d23-22c6-4dfb-9e32-cf296a3fb0b7',
+        'required_caption': ['@ladbible'],
+        'caption_footer':   'John Cena and Jessica Biel on @ladbible\n\n#JohnCena #JessicaBiel #LADbible',
+        # Not misleading, not an ad, nothing NSFW, never mock the guests.
+        'banned_patterns': [
+            r'\bsponsor', r'promo code', r'\buse code\b', r'#ad\b', r'\bdiscount\b', r'link in (the )?bio',
+            r'\bbuy (this|it|now|yours|tickets)\b', r'\bshop now\b', r'\bsign up\b', r'\bfree trial\b',
+            r'\bgiveaway\b', r'\bin (cinemas|theaters|theatres) now\b', r'\bstream(ing)? (it )?now\b',
+            r'\bleak(ed|s)?\b', r'\bexclusive\b', r'\bclickbait\b', r'\bofficial\b',
+            r'\bpsycho\b', r'\bidiot\b', r'\bstupid\b', r'\bdumb\b', r'\bugly\b', r'\bfat\b', r'\bloser\b',
+            r'\btrash\b', r'\bclown\b', r'\bcringe\b', r'\bdivorc', r'\bcheat(ing|ed)?\b',
+            r'\bf+u+c+k', r'sh[i*]t\b', r'\bsex\b', r'\bsexy\b', r'\bnsfw\b', r'\bnaked\b',
+            r'\btrump\b', r'\bbiden\b', r'\bharris\b', r'\bdemocrat', r'\brepublican',
+        ],
+        # No NSFW: swearing, sex talk or slurs in the audio rule the moment out (the episode has a
+        # "that is me having sex" sound guess and a couple of unbleeped "shit"s). LADbible bleeps
+        # its f-words itself (Whisper writes "f***"); those bleeped lines are allowed.
+        'transcript_banned': [
+            r'\bfuck', r'motherf', r'\bsh[i*]t\b', r'\bbitch', r'\bcunt\b', r'\bsex\b', r'\bnigg', r'\bfag', r'\bretard',
+        ],
+    },
+
+    # Whop: Clip Farm — milkXP Episode 3 (MilkPEP's creator challenge show: big creators take on
+    # fun challenges). Brief (Google doc, read in full): Episode 3 footage only; the milkXP
+    # watermark kept clear and never cropped; clip BOTH funny moments (laugh, fail, shocked face,
+    # best play, win, close call) AND "milk moments" (a creator talks about milk in their own
+    # words); caption in our own words, short, fun, matching the clip, tagging @milkxpofficial,
+    # never an ad ("buy this", "check out"). Milk is a regulated brand: no other drinks or drink
+    # brands, no exaggerated claims about milk (never best / perfect / ideal / greatest /
+    # healthy; "Milk can help you focus / lock in" is fine), only positive about milk, milkXP,
+    # the creators, teachers and students, no swearing or adult words, no milk brand name, label
+    # or logo, no sarcasm or negativity. Never comment on milkXP's long-form video, so the
+    # first-comment feature is hard-off here. $1.25/1K, 40%+ tier 1 with a primary US audience.
+    'milkxp': {
+        'source':       'release',
+        'release_tag':  'footage-milkxp',
+        'files': [
+            # WeTransfer "MilkPEP_milkXP_Episode3_YT_16x9.mp4" (9:38, 1080p), re-encoded to 720p H.264.
+            ('milkxp_ep3', 'MILKXP_EP3'),
+        ],
+        'max_runs':        6,
+        'archive':         False,
+        'silence_thresh':  0.8,
+        'wide_fallback':   True,
+        # Brief ~15-35 s. Milk moments are short asides (the first local run's were 7-13 s), so a
+        # complete 14 s beat counts (the render check allows 1 s under).
+        'min_seconds':     14.0,
+        'target_seconds':  (16, 28),
+        'max_seconds':     35.0,     # niche A caps a clip at 32 s
+        # The header names the challenge (the lounge, the budget, getting caught): only the
+        # punchline's own words spoil it, the show's topic words are not echoes or spoilers.
+        'spoiler_scope':   'punchline',
+        'topic_words':     ['secret', 'student', 'students', 'lounge', 'room', 'school', 'teacher', 'lesson',
+                            'budget', 'budgeting', 'needs', 'need', 'wants', 'want', 'savings', 'build', 'building',
+                            'caught', 'milk', 'challenge', 'grade', 'grades', 'class', 'cube', 'couch', 'hoop'],
+        'header_echo_share': 0.6,
+        'playlist':        'milkXP',
+        # Students and young adults, US after-dinner scroll (free slot between 19:30 and 20:00).
+        'publish_slots_et': ['19:45'],
+        'title_names':     ['milkXP'] + _MILKXP_CREATORS,
+        'cast_names':      list(_MILKXP_CAST),
+        # A creator challenge show: reality-like entertainment (niche A, A1 with a header band).
+        'genre':           'reality',
+        # Brief: on-screen text is optional (hook, point to the full show, build suspense): the A1
+        # header only, no context card / closing line / annotations. The watermark sits under the
+        # header band at the top of the video window, away from captions and the Shorts UI.
+        # The episode is full of the show's own graphics (name labels, lesson cards, score cards):
+        # they are the brand's content, so burned-in text only warns (burned_text_ok).
+        'render':          _render('A', names=list(_MILKXP_CAST), burned_text_ok=True,
+                                   watermark={'file': 'assets/watermarks/milkxp.png', 'width_frac': 0.62,
+                                              'pos': 'top'}),
+        # The brief asks for two kinds of clips: runs alternate which one is wanted (the analyzer
+        # is asked for both; the run's type wins when one of those passes every rule).
+        'clip_types': {
+            'funny':       ('a FUNNY MOMENT: a laugh, a fail, a shocked face, a big play, a win or a '
+                            'close call in a challenge'),
+            'milk_moment': ('a MILK MOMENT: a creator talks about milk in their own words (why they drink '
+                            'it, a milk memory, milk helping them focus or lock in), positive and genuine'),
+        },
+        # Never comment on milkXP's videos: no first comment is stored or posted for this campaign.
+        'first_comment':   False,
+        'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/7d376c42-0d49-4dab-80e9-5c3d76d67103',
+        'required_caption': ['@milkxpofficial'],
+        'caption_footer':   'From milkXP Episode 3. Full show on YouTube @milkxpofficial\n\n#milkXP #milk #challenge',
+        # Caption, title, tags, header and overlays.
+        'banned_patterns': _MILK_CAPTION_BANS,
+        # Clip audio: other drinks and drink brands, claims or negativity about milk, swearing.
+        'transcript_banned': _MILK_AUDIO_BANS,
+    },
+
     # Runway/craft footage with no speech, so these are hand-cut by scripts/jacobco_edits.py and
     # uploaded directly; the profile only maps their episode names for whop_queue.
     # Submissions close Fri 2026-10-23 11:59 PM ET. No demographics ticket (stats come from Content Rewards).
@@ -671,6 +858,42 @@ def moment_hints(profile, episode=None):
             span = f"{start:.0f}-{end:.0f}s" if end is not None else f"from ~{start:.0f}s"
             lines.append(f"  - [{span}] {what}")
     return '\n'.join(lines)
+
+
+def clip_type_for_run(profile, run):
+    """
+    The clip type this run wants when the brief asks for several kinds
+    (milkxp: funny / milk_moment): they alternate by run number (1-based),
+    so consecutive runs of an episode cover both. None if the profile has none.
+    """
+    types = list((profile.get('clip_types') or {}).keys())
+    if not types:
+        return None
+    try:
+        k = (int(run) - 1) % len(types)
+    except (TypeError, ValueError):
+        k = 0
+    return types[k]
+
+
+def clip_type_hint(profile, run):
+    """Prompt text asking for every clip type (each candidate labelled), this run's type first; '' if none."""
+    types = profile.get('clip_types') or {}
+    want = clip_type_for_run(profile, run)
+    if not want:
+        return ''
+    lines = ['CLIP TYPES: the brand wants these kinds of clips. Label every candidate with "clip_type" '
+             f'({" or ".join(repr(k) for k in types)}):']
+    lines += [f'  - "{k}": {v}' for k, v in types.items()]
+    others = [k for k in types if k != want]
+    lines.append(f'THIS RUN WANTS "{want}": give at least two "{want}" candidates first (if the transcript has '
+                 f'them), then at least one {" / ".join(repr(o) for o in others)} candidate as a fallback.')
+    return '\n'.join(lines)
+
+
+def comments_allowed(profile):
+    """False when the brief forbids commenting (milkxp): no first comment is stored or posted."""
+    return profile.get('first_comment', True) is not False
 
 
 _QUOTED = re.compile(r'"([^"]{3,})"|“([^”]{3,})”')

@@ -10,6 +10,8 @@ the clip plan) and writes <out>.qa.json next to it:
   text     caption cap height and centre at ~2 s; added overlay pixels below
            y 1440 / in the right rail; burned-in source text in 0-8 s (textguard)
   layout   black-bar rows and static uniform bands lasting > 0.5 s
+  brand    a brief-required watermark: inside the safe zone and drawn on every
+           sampled frame (final vs clean picture inside its box)
   faces    MediaPipe on 1 fps frames: face height, eye line, centre x, faces
            cut off by the video window
 
@@ -32,7 +34,11 @@ CAP_RANGE = (60, 68)
 # Frame checks run on half-resolution frames (540x960): a quarter of the
 # memory and decode time; results are reported in 1080x1920 canvas px.
 QS = 2
-HARD_FAILS = ('black_bars', 'static_band', 'overlay_below_safe', 'loudness', 'burned_text_0_8')
+HARD_FAILS = ('black_bars', 'static_band', 'overlay_below_safe', 'loudness', 'burned_text_0_8',
+              'watermark_missing', 'watermark_unsafe')
+# A watermark frame counts as drawn when this share of its box differs from the clean picture
+# (the logo's glyphs, outline and shadow cover ~40-60% of the box; the enhance pass alone ~0%).
+WM_DIFF, WM_MIN_SHARE, WM_MIN_FRAMES = 40, 0.08, 0.95
 
 
 def _run(cmd):
@@ -189,6 +195,19 @@ def overlay_checks(final_frames, clean_frames, allowed=()):
     return {'overlay_lowest_y': lowest, 'overlay_rail_px': rail}, boxes
 
 
+def watermark_checks(final_frames, clean_frames, box):
+    """Share of sampled frames whose watermark box holds the logo (final vs clean picture)."""
+    x0, y0, x1, y1 = (int(v) // QS for v in box)
+    shares = []
+    for f, c in zip(final_frames, clean_frames):
+        d = cv2.absdiff(f[y0:y1, x0:x1], c[y0:y1, x0:x1]).max(axis=2) > WM_DIFF
+        shares.append(float(d.mean()) if d.size else 0.0)
+    if not shares:
+        return {}
+    return {'watermark_frames': round(sum(s >= WM_MIN_SHARE for s in shares) / len(shares), 3),
+            'watermark_cover': round(float(np.median(shares)), 3)}
+
+
 def face_metrics(frames, window=None):
     """Median face size / eye line / centre x on output frames (fractions of the canvas)."""
     try:
@@ -277,6 +296,11 @@ def run(path, ctx=None, write=True):
     if clean1:
         ov, boxes = overlay_checks(final1, clean1, ctx.get('allowed_boxes') or ())
         qa.update(ov)
+    wm = ctx.get('watermark_box')
+    if wm:
+        qa['watermark_box'] = [int(v) for v in wm]
+        if clean1:
+            qa.update(watermark_checks(final1, clean1, wm))
     # caption size / position: median over the 1 fps frames of 1-8 s (one
     # frame can be thrown by burned-in text or a frame with no caption up)
     ty = ctx.get('caption_y')
@@ -299,7 +323,11 @@ def run(path, ctx=None, write=True):
         if clean:
             hits = burned_text(clean, 0.0, min(8.0, dur))
         else:
-            hits = burned_text(path, 0.0, min(8.0, dur), ignore_rows=ctx.get('ignore_text_rows', ()))
+            # our own watermark is not source text
+            ignore = list(ctx.get('ignore_text_rows', ()))
+            if wm:
+                ignore.append((wm[1] / H, wm[3] / H))
+            hits = burned_text(path, 0.0, min(8.0, dur), ignore_rows=ignore)
         qa['burned_text'] = [list(h) for h in hits]
     except Exception as exc:
         qa['burned_text_error'] = str(exc)
@@ -325,9 +353,17 @@ def evaluate(qa, ctx):
         hard.append(f"overlay_below_safe: overlay pixels down to y {qa['overlay_lowest_y']}")
     if 'lufs' in qa and abs(qa['lufs'] - LUFS_TARGET) > LUFS_TOL:
         hard.append(f"loudness: {qa['lufs']:.1f} LUFS")
+    wm = qa.get('watermark_box')
+    if wm:
+        x0, y0, x1, y1 = wm
+        if x0 < 0 or y0 < 0 or y1 > SAFE_BOTTOM or x1 > RAIL_X:
+            hard.append(f"watermark_unsafe: box {wm} outside the safe zone (y <= {SAFE_BOTTOM}, x <= {RAIL_X})")
+        if qa.get('watermark_frames') is not None and qa['watermark_frames'] < WM_MIN_FRAMES:
+            hard.append(f"watermark_missing: drawn on {qa['watermark_frames']:.0%} of sampled frames")
     if qa.get('burned_text'):
         # podcasts carry their own lower thirds / slides: warn only on niche B
-        target = warn if niche == 'B' else hard
+        # (and a brand show's own graphics when the profile says so: render['burned_text_ok'])
+        target = warn if niche == 'B' or ctx.get('burned_text_ok') else hard
         target.append(f"burned_text_0_8: {qa['burned_text']}")
 
     if qa.get('true_peak', -99) > -1.8:

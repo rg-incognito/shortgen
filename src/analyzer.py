@@ -13,7 +13,8 @@ def _gemini_post(payload, api_key, timeout=120):
         try:
             resp = requests.post(
                 _GEMINI_BASE.format(model),
-                params={'key': api_key},
+                # header, not ?key=: an HTTPError message quotes the URL, which leaked the key into logs
+                headers={'x-goog-api-key': api_key},
                 json=payload,
                 timeout=timeout,
             )
@@ -70,7 +71,7 @@ _CONFLICT_LINE = re.compile(
 # Which originality layer each genre gets (virality spec section 8).
 GENRES = {'friends': 'sitcom', 'loveisblind': 'reality', 'loveandjustice': 'reality',
           'markmanson': 'podcast', 'unpacked': 'talk', 'youngla': 'talk',
-          'tonyhawk': 'sitcom', 'bilf': 'podcast'}
+          'tonyhawk': 'sitcom', 'bilf': 'podcast', 'ladbible': 'talk', 'milkxp': 'reality'}
 
 # First words that make a scrolling viewer leave: filler, connectives, setup.
 FILLER_OPENERS = {'so', 'um', 'umm', 'uh', 'uhh', 'er', 'erm', 'hmm', 'mm', 'mhm', 'okay', 'ok',
@@ -958,6 +959,121 @@ Rules (brand requirements — breaking any of these gets the clip rejected):
 - pinned_comment: a genuine question about the idea that invites discussion."""
 
 
+_LADBIBLE_PROMPT = """You are a short-form video editor clipping LADbible Entertainment's episode with John Cena and Jessica Biel ("Snack Wars: Showdown") for an official clipping campaign run for LADbible. The episode cuts between two formats: Snack Wars (white set: the couple taste snacks from around the world and pick a winner and a loser) and Showdown (red set: head-to-head games: make the sound on the card for the other to guess, guess the famous movie quote, cup stacking).
+
+The audience: fans of John Cena and Jessica Biel and of celebrity entertainment. The goal: a stranger laughs at the couple's banter, watches to the end and wants the full episode on LADbible.
+
+Find the best standalone moments in this episode for a vertical YouTube Short.
+
+WHAT WORKS (ranked):
+1. A big reaction: one of them tastes something and their face and words sell it (disgust played for laughs, a surprise favourite, a dramatic verdict)
+2. Couple banter that escalates: teasing, trash talk about the game, one calling the other out, a running joke that pays off
+3. A great one-liner or a deadpan John Cena answer that lands a laugh
+4. A competitive moment in the Showdown: a quote guessed (or butchered), a point won or lost, a bold guess, the final winner
+
+HARD RULES (the brand rejects clips that break these):
+- ONE continuous scene. 1-3 clips from that same passage, back-to-back, in chronological order, and from ONE format (never mix a Snack Wars bit with a Showdown bit).
+- Open on the line or reaction that hooks, never on the host explaining the rules or reading out the next round. Never the intro or the "watch next / subscribe" end card.
+- Keep it fun and kind: never pick a stretch that makes either of them look bad, nothing taken out of context, never cut so a line means something different from what they meant.
+- Nothing NSFW, no heavy swearing, nothing political, no product plugs or "link in bio" talk.
+- Clips must NOT overlap each other or the previously used segments.
+
+Previously used moments from this episode (AVOID these themes): {used_storylines}
+
+Previously used segments (AVOID these timestamps): {used_segments}
+
+Transcript, one numbered sentence per line (format: S<number> [start_sec-end_sec] text):
+{transcript}
+
+Field rules:
+- storyline_title: snake_case, max 40 chars
+- storyline_summary: one sentence that names John Cena and/or Jessica Biel and what happens
+- series_tag: always "ladbible"
+- header: 4-9 words, ALL CAPS, names John Cena or Jessica Biel and states the situation (e.g. "JOHN CENA VS A SWEDISH SALT LIQUORICE"), never the reaction or the verdict. Not shown on this campaign's video (kept for the logs).
+- hook_emoji: 1-2 emoji that fit (😭 😂 🤢 🍬 😳) or "" if none fit"""
+
+_LADBIBLE_YT_PROMPT = """You write YouTube Shorts metadata for a clip of LADbible Entertainment's episode with John Cena and Jessica Biel (Snack Wars: Showdown). It must read like a fan posting a funny clip, and it must describe exactly what happens: the brand rejects misleading captions.
+
+Moment : {storyline}
+Summary: {summary}
+
+Return ONLY valid JSON, no markdown:
+{{
+  "title": "John Cena tries <the concrete snack or situation in THIS clip> 😭",
+  "description": "<one fun line about what actually happens in this clip>\\n\\nJohn Cena and Jessica Biel on @ladbible\\n\\n#JohnCena #JessicaBiel #LADbible",
+  "tags": "John Cena, Jessica Biel, LADbible, Snack Wars, celebrity snack challenge",
+  "pinned_comment": "<a short fun question about the moment> 👇"
+}}
+
+Rules (brand requirements — breaking any of these gets the clip rejected):
+- Describe ONLY what actually happens in this clip. No misleading hooks, no invented quotes, outcomes or drama between them. No clickbait.
+- title: starts with "John Cena" or "Jessica Biel", short, fun, conversational.
+- description: 1-2 short lines about the moment → blank line → a line that contains "@ladbible" (e.g. "John Cena and Jessica Biel on @ladbible") → blank line → 3-5 hashtags (names, LADbible).
+- Never call this page official, never mention leaks or exclusives, no promo codes or links.
+- Keep it kind: never mock either of them. Nothing NSFW, no swearing, nothing political.
+- tags: 5-10 specific tags (names, LADbible, the snack or game).
+- pinned_comment: a short fun question about the moment (would you eat it, who won)."""
+
+
+_MILKXP_PROMPT = """You are a short-form video editor clipping Episode 3 of milkXP, a show where big viral creators take on fun challenges, for an official clipping campaign. milkXP is made by a milk brand, and milk is a regulated product: the brand's rules below are strict and a clip that breaks one is rejected.
+
+This episode: creator Ben Azelart teams up with teacher Mr. Greg to secretly build a student lounge inside a real school on a $5,000 budget without getting caught, while Mr. Greg teaches the 50/30/20 budgeting rule (needs, wants, savings); the students move in and grade Mr. Greg at the end. Spell the names exactly: Ben Azelart, Mr. Greg.
+
+The audience: students and young adults in the US who follow these creators. The goal: a stranger laughs or smiles, watches to the end and wants the full show on YouTube.
+
+Find the best standalone moments in this episode for a vertical YouTube Short. The brand wants TWO kinds of clips (see CLIP TYPES below if given):
+- FUNNY MOMENTS: a laugh, a fail, a shocked face, a big play, a win or a close call in a challenge
+- MILK MOMENTS: a creator talks about milk in their own words (why they drink it, a milk memory, milk helping them focus or lock in), positive and genuine
+
+HARD RULES (the brand rejects clips that break these):
+- ONE continuous scene. 1-3 clips from that same scene, back-to-back, in chronological order.
+- Hook in the first 2 seconds: never open on someone explaining the rules of the challenge.
+- MILK RULES: only positive about milk, milkXP, the creators, teachers and students. NEVER pick a moment where anyone names or drinks another drink (oat, almond, soy, coconut, rice or nut milk, raw milk, juice, soda, coffee, sports or energy drinks, protein shakes, alcohol) or names any drink or milk brand. NEVER pick a moment where someone says milk is the best, perfect, ideal, greatest or healthy (or any health claim), or says anything negative or sarcastic about milk.
+- No swearing or adult words at all (not even mild ones like damn or hell, and no bleeped words), nothing NSFW, violent or political.
+- Never pick the sponsor read ("a quick break from our sponsor", "brought to you by", nutrients and vitamins): it is an ad, not a creator talking in their own words.
+- Keep it kind: never pick a stretch that mocks or embarrasses a creator, a teacher or a student.
+- Clips must NOT overlap each other or the previously used segments.
+
+Previously used moments from this episode (AVOID these themes): {used_storylines}
+
+Previously used segments (AVOID these timestamps): {used_segments}
+
+Transcript, one numbered sentence per line (format: S<number> [start_sec-end_sec] text):
+{transcript}
+
+Field rules:
+- storyline_title: snake_case, max 40 chars
+- storyline_summary: one sentence that names the creator(s) and what happens
+- series_tag: always "milkxp"
+- clip_type: "funny" or "milk_moment"
+- header: 4-9 words, ALL CAPS, names the creator and states the challenge or situation (e.g. "TWO CREATORS RACE TO STACK 50 CUPS"), never the outcome. It is on screen for the whole clip. It must follow the MILK RULES: never best, perfect, ideal, greatest, healthy or any claim about milk, never another drink or a brand, never sarcastic, nothing like an ad ("buy", "check out", "try it").
+- hook_emoji: 1-2 emoji that fit (😂 😳 🔥 🥛 🏆) or "" if none fit"""
+
+_MILKXP_YT_PROMPT = """You write YouTube Shorts metadata for a clip of milkXP Episode 3, a show where big viral creators take on fun challenges. milkXP is made by a milk brand: the caption must sound like a fan posting a fun clip in their own words, NEVER like an ad, and it must follow the brand's milk rules exactly.
+
+Moment : {storyline}
+Summary: {summary}
+
+Return ONLY valid JSON, no markdown:
+{{
+  "title": "<creator's name> <short fun tease about THIS moment> 😂",
+  "description": "<one short fun line about what actually happens>\\n\\nFrom milkXP Episode 3. Full show on YouTube @milkxpofficial\\n\\n#milkXP #<creator> #<challenge>",
+  "tags": "milkXP, <creator's name>, <challenge>, creator challenge",
+  "pinned_comment": ""
+}}
+
+Rules (brand requirements — breaking any of these gets the clip rejected):
+- Describe ONLY what actually happens in this clip, in your own words. Short and fun. No misleading hooks, no invented quotes or outcomes.
+- title: starts with the creator's name (or "milkXP"), under 60 characters.
+- description: 1 short line → blank line → a line that tags @milkxpofficial (pointing to the full show on YouTube is good) → blank line → 3-5 hashtags.
+- NOT AN AD: never "buy", "check out", "shop", "try it", "get yours", "link in bio", discounts, codes, sponsor talk or any call to buy something.
+- MILK RULES: never call milk the best, perfect, ideal, greatest or healthy, and no health or nutrition claims at all. Allowed: "Milk can help you focus", "Milk can help you lock in". Only positive about milk, milkXP, the creators, teachers and students. No sarcasm, no negativity, nothing gross.
+- Never name any other drink (oat, almond, soy, coconut, rice or nut milk, raw milk, juice, soda, coffee, tea, sports or energy drinks, protein shakes, alcohol) and never name any brand of milk or of any drink.
+- No swearing or adult words at all, nothing NSFW or political.
+- tags: 5-10 specific tags (milkXP, creator names, the challenge), no brands.
+- pinned_comment: always "" (this campaign never comments)."""
+
+
 _PROMPTS = {
     'youngla':        (_YLA_PROMPT, _YLA_YT_PROMPT),
     'loveisblind':    (_LIB_PROMPT, _LIB_YT_PROMPT),
@@ -966,6 +1082,8 @@ _PROMPTS = {
     'unpacked':       (_UNPACKED_PROMPT, _UNPACKED_YT_PROMPT),
     'tonyhawk':       (_TONY_PROMPT, _TONY_YT_PROMPT),
     'bilf':           (_BILF_PROMPT, _BILF_YT_PROMPT),
+    'ladbible':       (_LADBIBLE_PROMPT, _LADBIBLE_YT_PROMPT),
+    'milkxp':         (_MILKXP_PROMPT, _MILKXP_YT_PROMPT),
 }
 
 # Shape example per campaign. Sentence numbers are 0 placeholders: the model
@@ -1013,6 +1131,16 @@ _EXAMPLES = {
              'She opens on the rejection and lands the lesson', 'ST',
              'Founder on hearing no from every bank in the room', 'Would you have kept going after that? 👇',
              None),
+    'ladbible': ('standalone_scene', 'cena_tastes_salt_liquorice',
+                 'John Cena tries a snack he has never seen before and Jessica Biel watches him suffer',
+                 'ladbible', 'JOHN CENA VS A SNACK HE HAS NEVER SEEN', '😭', 'scene',
+                 'The first bite and his reaction', 'AV',
+                 None, None, None),
+    'milkxp': ('standalone_scene', 'creator_cup_stack_close_call',
+               'Two creators race to finish the challenge and it comes down to the last second',
+               'milkxp', 'TWO CREATORS RACE THE CLOCK ON THE LAST ROUND', '😳', 'scene',
+               'The final seconds and the reaction', 'AV',
+               None, None, None),
 }
 
 # Campaign-specific originality layer, when the brief allows less (or asks for more) than the genre default.
@@ -1024,6 +1152,12 @@ _CAMPAIGN_LAYER_RULES = {
     'bilf': ('Primary layer for this podcast: context_line is REQUIRED, it is the on-screen text hook for the first '
              '2.5 s (names the guest and the stake, matches what the clip delivers); closing_line is a question that '
              'invites a take. Never quotation marks around words that were not said verbatim. annotations: [].'),
+    'ladbible': ('This campaign shows no added text besides the captions and the brand watermark: context_line: '
+                 'null, closing_line: null, annotations: []. Put your framing into the header (kept for the logs).'),
+    'milkxp': ('Originality layer for this brand: the header (on screen the whole clip) names the creator and the '
+               'challenge or situation, and builds suspense without giving away the outcome. context_line: null, '
+               'closing_line: null, annotations: [] (the brief allows only a short hook). The header follows the '
+               'MILK RULES: no claim about milk, no other drink, no brand, nothing sarcastic or ad-like.'),
 }
 
 _LAYER_RULES = {

@@ -25,7 +25,8 @@ from campaigns import (get_campaign, find_banned, find_transcript_banned, enforc
                        tidy_title, title_problems, clean_hashtags, header_problems, overlay_checks,
                        render_config, length_plan, story_max_seconds, layer_caps, rubric_gate, clip_text,
                        assign_variant, apply_variant, EXPERIMENTS, moment_hints, quote_problems, episode_guest,
-                       fallback_layer_lines, layer_line_problem, layer_names, faithful_problems, _EMOJI)
+                       fallback_layer_lines, layer_line_problem, layer_names, faithful_problems, _EMOJI,
+                       clip_type_for_run, clip_type_hint, comments_allowed)
 from footage import download_from_release, sponsor_segments
 
 try:   # render side (Coder B); absent until that branch is merged
@@ -104,8 +105,10 @@ def _burned_text_problems(story, video_path, attempt=1, profile=None):
     slides and lower thirds are legitimately flagged.
     """
     problems = _burned_text_scan(story, video_path, attempt)
-    if problems and render_config(profile or {}).get('niche') == 'B':
-        print(f"      Warning: {'; '.join(problems)} (kept: podcast/talk on-screen graphics)")
+    render = render_config(profile or {})
+    if problems and (render.get('niche') == 'B' or render.get('burned_text_ok')):
+        # burned_text_ok: a brand's own show graphics (milkxp's labels and lesson cards) are content
+        print(f"      Warning: {'; '.join(problems)} (kept: the show's own on-screen graphics)")
         return []
     return problems
 
@@ -310,7 +313,8 @@ def _candidate_problems(story, sents, all_words, used, profile, video_path=None,
 
 
 def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storylines,
-                campaign, profile, src_dur, attempts=3, video_path=None, prior_headers=(), hints=''):
+                campaign, profile, src_dur, attempts=3, video_path=None, prior_headers=(), hints='',
+                want_type=None):
     """
     Ask Gemini for 3-5 candidate moments as sentence ranges, cut them on whole
     sentences, rank them in code (0.4 hook + 0.3 payoff + 0.2 clarity + 0.1
@@ -399,6 +403,15 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
                   f"[{story.get('header', '')}] -> {verdict}")
 
         passing = [story for story, problems in ranked if not problems]
+        # A brief with several clip kinds (milkxp): this run's kind wins when one passes the gate.
+        if want_type:
+            typed = [s for s in passing if str(s.get('clip_type') or '').strip().lower() == want_type
+                     and s['score'] >= min_score]
+            if typed:
+                if typed[0] is not passing[0]:
+                    print(f"      Clip type {want_type}: '{typed[0]['storyline_title']}' "
+                          f"[{typed[0]['score']:.1f}] over '{passing[0]['storyline_title']}'")
+                return typed[0]
         if passing and passing[0]['score'] >= min_score:
             return passing[0]
         if passing and (not best_weak or passing[0]['score'] > best_weak['score']):
@@ -600,6 +613,11 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
     in_campaign = lambda ep: episode_campaign(ep) == campaign
     rejected = []   # segments of renders that showed burned-in text
     hints = moment_hints(profile, episode_name)
+    # Briefs that want several kinds of clips: ask for all of them, prefer this run's kind.
+    want_type = clip_type_for_run(profile, run)
+    if want_type:
+        hints = '\n\n'.join(h for h in (hints, clip_type_hint(profile, run)) if h)
+        print(f"      Clip type wanted this run: {want_type}")
     # A native 9:16 source (e.g. a brand's vertical recap cut) needs no 4:5 window crop.
     vertical = bool(profile.get('vertical_template')) and _is_vertical(video_path)
     if vertical:
@@ -608,7 +626,8 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
         try:
             story = _pick_story(segments, all_words, gemini_api_key, list(avoid_segments) + rejected,
                                 used_storylines, campaign, profile, src_dur, video_path=str(video_path),
-                                prior_headers=prior_headers, **({'hints': hints} if hints else {}))
+                                prior_headers=prior_headers, **({'hints': hints} if hints else {}),
+                                **({'want_type': want_type} if want_type else {}))
         except WeakMomentSkip as e:
             e.segments = list(getattr(e, 'segments', None) or []) + rejected
             raise
@@ -857,6 +876,10 @@ def main():
         if yt_meta:
             # The closing line doubles as the first comment (posted after publish, only when enabled).
             first_comment = story.get('closing_line') or yt_meta.get('pinned_comment', '')
+            if not comments_allowed(profile):
+                # Brief forbids commenting (milkxp): nothing is stored, so nothing can ever be posted.
+                first_comment = ''
+                yt_meta['pinned_comment'] = ''
             # Row must exist before update_yt_url fills in scheduled_at / yt_url.
             tracker.log_posting_metadata(episode_name, current_run, story, yt_meta)
             try:
