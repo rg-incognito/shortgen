@@ -29,6 +29,9 @@ SAFE_BOTTOM = 1440
 RAIL_X, RAIL_Y = (990, (900, 1700))
 LUFS_TARGET, LUFS_TOL = -14.0, 0.7
 CAP_RANGE = (60, 68)
+# Frame checks run on half-resolution frames (540x960): a quarter of the
+# memory and decode time; results are reported in 1080x1920 canvas px.
+QS = 2
 HARD_FAILS = ('black_bars', 'static_band', 'overlay_below_safe', 'loudness', 'burned_text_0_8')
 
 
@@ -134,31 +137,32 @@ def band_checks(path):
 
 def _caption_box(frame, diff=None, rows=(700, 1500)):
     """(cap_px, centre_y) of the outlined white caption line in one frame, or None."""
-    y0, y1 = rows
+    y0, y1 = rows[0] // QS, rows[1] // QS           # frame is half resolution
     roi = frame[y0:y1]
     white = roi.min(axis=2) > 215
     dark = roi.max(axis=2) < 60
-    outlined = white & (cv2.dilate(dark.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0)
+    outlined = white & (cv2.dilate(dark.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0)
     mask = cv2.dilate(outlined.astype(np.uint8), np.ones((3, 3), np.uint8)) & white
     if diff is not None:
         mask &= diff[y0:y1]
     n, _, st, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
-    comps = [st[i] for i in range(1, n) if 25 <= st[i][3] <= 160 and st[i][4] > 60 and st[i][2] < 200]
+    comps = [st[i] for i in range(1, n)
+             if 12 <= st[i][3] <= 80 and st[i][4] > 15 and st[i][2] < 100]
     if len(comps) < 2:
         return None
     # the caption line = the largest group of glyphs sharing a baseline
     comps.sort(key=lambda s: s[1] + s[3])
     best = []
     for c in comps:
-        grp = [d for d in comps if abs((d[1] + d[3]) - (c[1] + c[3])) <= 6]
+        grp = [d for d in comps if abs((d[1] + d[3]) - (c[1] + c[3])) <= 3]
         if len(grp) > len(best):
             best = grp
     if len(best) < 2:
         return None
-    cap = float(np.median([g[3] for g in best]))
+    cap = float(np.median([g[3] for g in best])) * QS
     top = min(g[1] for g in best)
     bot = max(g[1] + g[3] for g in best)
-    return round(cap, 1), int(y0 + (top + bot) / 2)
+    return round(cap, 1), int((y0 + (top + bot) / 2) * QS)
 
 
 def overlay_checks(final_frames, clean_frames, allowed=()):
@@ -168,15 +172,15 @@ def overlay_checks(final_frames, clean_frames, allowed=()):
         d = cv2.absdiff(f, c).max(axis=2) > 70
         d = cv2.morphologyEx(d.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)) > 0
         for x0, y0, x1, y1 in allowed:
-            d[y0:y1, x0:x1] = False
+            d[y0 // QS:-(-y1 // QS), x0 // QS:-(-x1 // QS)] = False
         ys, xs = np.nonzero(d)
-        if len(ys) < 30:
+        if len(ys) < 8:
             boxes.append(None)
             continue
-        boxes.append((int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())))
-        lowest = max(lowest, int(np.percentile(ys, 99.9)))
-        band = d[RAIL_Y[0]:RAIL_Y[1], RAIL_X:]
-        rail = max(rail, int(band.sum()))
+        boxes.append((int(xs.min()) * QS, int(ys.min()) * QS, int(xs.max()) * QS, int(ys.max()) * QS))
+        lowest = max(lowest, int(np.percentile(ys, 99.9)) * QS)
+        band = d[RAIL_Y[0] // QS:RAIL_Y[1] // QS, RAIL_X // QS:]
+        rail = max(rail, int(band.sum()) * QS * QS)
     return {'overlay_lowest_y': lowest, 'overlay_rail_px': rail}, boxes
 
 
@@ -262,9 +266,9 @@ def run(path, ctx=None, write=True):
         qa['mid_word_joins'] = mid_word_joins(ctx.get('joins') or [], words)
     qa.update(band_checks(path))
 
-    final1 = _decode(path, 1, W, H)
+    final1 = _decode(path, 1, W // QS, H // QS)
     clean = ctx.get('clean_video')
-    clean1 = _decode(clean, 1, W, H) if clean else None
+    clean1 = _decode(clean, 1, W // QS, H // QS) if clean else None
     if clean1:
         ov, boxes = overlay_checks(final1, clean1, ctx.get('allowed_boxes') or ())
         qa.update(ov)

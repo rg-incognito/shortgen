@@ -394,8 +394,7 @@ _HEAD_STROKE   = 3
 _CARD_SIZE     = 56
 _CARD_MIN      = 44
 _CARD_MAX_W    = 900
-_CARD_Y_A1     = 400      # A1: card centre just under the headline band
-_CARD_GAP      = 110      # full-bleed: card top this far below the caption centre
+_CARD_GAP      = 110      # card top this far below the caption centre
                           # (the eye line sits at ~y 540, so a card there covers the face)
 _CARD_END      = 2.5      # s
 _CLOSE_EM      = 60       # Montserrat ExtraBold Italic, em px (header look)
@@ -805,15 +804,13 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
                 allowed.append(box)
         if ov.get('context'):
             p = os.path.join(work, 'card.png')
-            if template == 'A1':
-                render_card_png(ov['context'], p, centre_y=_CARD_Y_A1)
-            else:
-                render_card_png(ov['context'], p, top_y=cy + _CARD_GAP)
+            # under the caption on every template: higher up it covers the head
+            render_card_png(ov['context'], p, top_y=cy + _CARD_GAP)
             pngs.append((p, min(_CARD_END, dur)))
 
         # closing line rides the tail hold; captions clear when it starts
         script_ov = {'tags': ov.get('tags') or []}
-        last_end = ov.get('last_word_end', dur)
+        last_end = ov.get('last_word_end') or dur        # no transcript words: hold = whole end
         if ov.get('closing'):
             start = max(dur - _CLOSE_MAX_S, min(last_end + 0.05, dur - _CLOSE_MIN_S))
             if start >= last_end - 0.15:
