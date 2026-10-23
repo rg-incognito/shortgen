@@ -77,6 +77,16 @@ FILLER_OPENERS = {'so', 'um', 'umm', 'uh', 'uhh', 'er', 'erm', 'hmm', 'mm', 'mhm
                   'well', 'yeah', 'and', 'but', 'like', 'anyway', 'anyways', 'alright', 'right',
                   'because', 'cause', 'also'}
 FILLER_PHRASES = {'you know', 'i mean', 'kind of', 'sort of'}
+# Podcast / talk: leading filler is cut off the first sentence instead of
+# rejecting the moment ("So they laughed me out of the room" -> "They laughed...").
+TRIM_FILLERS = {'so', 'and', 'like', 'um', 'umm', 'uh', 'uhh', 'er', 'erm', 'hmm', 'mm', 'mhm',
+                'okay', 'ok', 'well', 'yeah', 'anyway', 'anyways', 'alright'}
+TRIM_FILLER_PHRASES = {('you', 'know'), ('i', 'mean')}
+TRIM_MAX_WORDS = 4         # at most this many leading words are cut
+TRIM_MIN_LEFT = 3          # ...and at least this many words of the sentence stay
+# "so" as an intensifier is content ("So much money"), not filler.
+_SO_CONTENT = {'much', 'many', 'far', 'long', 'bad', 'good', 'hard', 'big', 'true', 'proud', 'happy',
+               'sad', 'weird', 'funny', 'crazy', 'scared', 'excited', 'grateful', 'lucky', 'close'}
 _SETUP_OPENER  = re.compile(
     r"^\W*(so\s+)?(today\b|welcome\b|hi\b|hello\b|hey (guys|everyone|everybody)\b|what'?s up\b|"
     r"let me (tell|explain)\b|let'?s (talk|get into|start)\b|in this (video|episode)\b|"
@@ -235,6 +245,7 @@ def build_candidate(raw, sents, words):
     story['opening_line'] = sents[ranges[0][0]]['text']
     story['payoff_line'] = sents[ranges[-1][1]]['text']
     story['_payoff_text'] = sents[payoff_k]['text']
+    story['_payoff_start'] = sents[payoff_k]['start']
     story['_total_seconds'] = round(sum(c['end_seconds'] - c['start_seconds'] for c in clips), 1)
 
     # Contract fields for the renderer (episode seconds).
@@ -315,6 +326,8 @@ def later_start(story, sents, words, max_shift=LATER_START_MAX):
         if not cls:
             continue
         new = dict(story)
+        new.pop('_open_w', None)
+        new.pop('_filler_trim', None)
         new['clips'] = [dict(c) for c in story['clips']]
         new['clips'][0]['start_seconds'] = clip_times(sents, words, k, b)[0]
         new['_sentences'] = [(k, b)] + list(story['_sentences'][1:])
@@ -337,6 +350,50 @@ def _words_of(text):
     return re.findall(r"[a-z0-9']+", (text or '').lower())
 
 
+def trim_filler_opener(story, sents, words):
+    """
+    The story with leading filler words ("so", "and", "like", "um", "you
+    know"...) cut off its first sentence: the clip starts just before the
+    next word (never inside the cut filler word). None when the opener has
+    no leading filler, or too little of the sentence would be left.
+    The caller re-checks the trimmed opener (hook_problems).
+    """
+    a = story['_sentences'][0][0]
+    s = sents[a]
+    if s['w0'] is None or story.get('_open_w') is not None:
+        return None
+    i, w1 = s['w0'], s['w1']
+    tok = lambda k: (_words_of(words[k]['word']) or [''])[0]
+    while i <= w1 and i - s['w0'] < TRIM_MAX_WORDS:
+        t = tok(i)
+        if i + 1 <= w1 and (t, tok(i + 1)) in TRIM_FILLER_PHRASES:
+            i += 2
+        elif t in TRIM_FILLERS and not (t == 'so' and i + 1 <= w1 and tok(i + 1) in _SO_CONTENT):
+            i += 1
+        elif t == 'then' and i > s['w0']:          # "and then she said" -> "she said"
+            i += 1
+        else:
+            break
+    if i == s['w0'] or w1 - i + 1 < TRIM_MIN_LEFT:
+        return None
+    new = dict(story)
+    new['clips'] = [dict(c) for c in story['clips']]
+    start = max(words[i]['start'] - _LEAD_PAD, words[i - 1]['end'] + 0.01)
+    new['clips'][0]['start_seconds'] = round(max(0.0, start), 3)
+    text = ' '.join(w['word'] for w in words[i:w1 + 1]).strip()
+    new['opening_line'] = text[:1].upper() + text[1:]
+    new['_open_w'] = i
+    new['_filler_trim'] = ' '.join(words[k]['word'] for k in range(s['w0'], i)).strip()
+    new['_total_seconds'] = round(sum(c['end_seconds'] - c['start_seconds'] for c in new['clips']), 1)
+    if new.get('payoff_t') is not None and new['_total_seconds']:
+        p_off = story_offset(new['clips'], new['payoff_t'])
+        if p_off is not None:
+            new['_payoff_pos'] = round(p_off / new['_total_seconds'], 2)
+    new['annotations'] = [x for x in story.get('annotations') or []
+                          if story_offset(new['clips'], x['t']) is not None]
+    return new
+
+
 def _quotes(claimed, actual):
     """True if most of the LLM's quoted words appear in the actual line(s)."""
     cw, aw = _words_of(claimed), set(_words_of(actual))
@@ -349,7 +406,10 @@ def hook_problems(story, sents, words):
     """Reasons the opening will not hold a scrolling viewer (empty list = fine)."""
     problems = []
     a = story['_sentences'][0][0]
-    opening = sents[a]['text']
+    w0 = story.get('_open_w')          # first kept word after a filler trim
+    opening = story['opening_line'] if w0 is not None else sents[a]['text']
+    if w0 is None:
+        w0 = sents[a]['w0']
     first = _words_of(opening)
     if first and first[0] in FILLER_OPENERS:
         problems.append(f'opens on filler "{first[0]}"')
@@ -365,8 +425,8 @@ def hook_problems(story, sents, words):
     nearby = ' '.join(s['text'] for s in sents[a:max(a, story.get('_llm_start', a)) + 2])
     if claimed and not _quotes(claimed, nearby):
         problems.append(f'opening_line does not match S{a} (sentence numbers are off)')
-    if words and sents[a]['w0'] is not None:
-        lead = words[sents[a]['w0']]['start'] - story['clips'][0]['start_seconds']
+    if words and w0 is not None:
+        lead = words[w0]['start'] - story['clips'][0]['start_seconds']
         if lead > 0.4:
             problems.append(f'speech starts {lead:.1f}s in')
     return problems
@@ -1044,7 +1104,23 @@ Return ONLY a valid JSON object, no markdown, no explanation. The example shows 
 {_example_json(campaign)}"""
 
 
-def _title_rules(campaign, story, title_names, recent_titles):
+_TRANSCRIPT_MAX = 1800     # chars of clip transcript sent with the metadata prompt
+
+
+def _faith_rules(transcript):
+    if not transcript:
+        return ''
+    text = ' '.join(str(transcript).split())
+    if len(text) > _TRANSCRIPT_MAX:
+        text = text[:_TRANSCRIPT_MAX].rsplit(' ', 1)[0] + ' ...'
+    return f"""
+- FAITHFUL: the title and description may claim ONLY what is said in this clip. Never add a person, role or relationship (boss, husband, mom, investor, coworker...) or an event the clip does not contain; use the speaker's own framing (if she says she was "laughed out of the room", do not turn it into "her boss laughed at her").
+- title_check: also return "title_check": {{"supported_by": "<the clip words the title's claim rests on, copied verbatim>", "adds_unsupported": false}}. If your title adds anything the clip does not say, rewrite the title; never return adds_unsupported true.
+- What is actually said in the clip (transcript): "{text}".
+"""
+
+
+def _title_rules(campaign, story, title_names, recent_titles, transcript=None):
     names = ', '.join(title_names or []) or 'the show or the person in the clip'
     actor = (' For a scripted show name the ACTOR (e.g. "Matthew Perry\'s Chandler..."), not only the character.'
              if campaign == 'friends' else '')
@@ -1060,7 +1136,7 @@ TITLE AND HASHTAG RULES (these override the example and rules above):
 - title: different wording AND structure from every one of these recent titles:
 {recent}
 - description: ends with ONE line of 3-5 specific hashtags: the show or person first, then names or the exact topic. Never #viral #trending #foryou #fyp #ytshorts #shorts #shortsfeed #funnymoments #comedy #relationshipgoals or any other broad tag.
-- tags: 5-10 specific tags (show, real names, characters, episode or topic), no generic words like "funny moments" or "comedy"."""
+- tags: 5-10 specific tags (show, real names, characters, episode or topic), no generic words like "funny moments" or "comedy".""" + _faith_rules(transcript)
 
 
 def _parse_json(raw):
@@ -1070,8 +1146,8 @@ def _parse_json(raw):
 
 
 def yt_metadata_prompt(story, episode_name, campaign='friends', title_names=None, recent_titles=None,
-                       notes=None):
-    """The metadata prompt (notes: per-episode facts such as the guest's name)."""
+                       notes=None, transcript=None):
+    """The metadata prompt (notes: per-episode facts such as the guest's name; transcript: the clip's words)."""
     m = re.search(r'[Ss](\d+)[Ee](\d+)', episode_name)
     ep_str = f"S{int(m.group(1))}E{int(m.group(2))}" if m else episode_name
     template = _PROMPTS.get(campaign, (_PROMPT, _YT_PROMPT))[1]
@@ -1084,13 +1160,13 @@ def yt_metadata_prompt(story, episode_name, campaign='friends', title_names=None
     )
     if notes:
         prompt += f"\n\nEpisode notes: {notes}"
-    return prompt + _title_rules(campaign, story, title_names, recent_titles)
+    return prompt + _title_rules(campaign, story, title_names, recent_titles, transcript)
 
 
 def generate_yt_metadata(story, episode_name, api_key, retries=3, campaign='friends',
-                         title_names=None, recent_titles=None, notes=None):
+                         title_names=None, recent_titles=None, notes=None, transcript=None):
     api_key = api_key.strip()
-    prompt = yt_metadata_prompt(story, episode_name, campaign, title_names, recent_titles, notes)
+    prompt = yt_metadata_prompt(story, episode_name, campaign, title_names, recent_titles, notes, transcript)
     payload = {
         'contents': [{'parts': [{'text': prompt}]}],
         'generationConfig': {'temperature': 0.7},
@@ -1103,6 +1179,40 @@ def generate_yt_metadata(story, episode_name, api_key, retries=3, campaign='frie
             if attempt < retries:
                 time.sleep(10)
     return None
+
+
+_LAYER_FIELD_RULES = {
+    'context_line': ('context_line: the on-screen text hook for the first 2.5 seconds, 4-10 words, names who is '
+                     'speaking and the concrete stake of THIS clip (e.g. "Stax founder on getting turned down by '
+                     'every bank"). It must match what the clip delivers and never overpromise.'),
+    'closing_line': ('closing_line: shown over the last second, a verdict or a short question that invites a take '
+                     'in the comments (e.g. "Would you have quit your job for this?"), at most 10 words.'),
+}
+
+
+def layer_line_prompt(story, field, transcript, campaign='friends', avoid=None):
+    """Follow-up prompt for one missing originality line (context_line / closing_line)."""
+    text = ' '.join(str(transcript or '').split())[:_TRANSCRIPT_MAX]
+    tried = f'\nThese were rejected (echoed the dialogue or broke a rule), write something different: {avoid}' if avoid else ''
+    return (f"You are packaging a vertical clip ({campaign}). Moment: {story.get('storyline_summary', '')}\n"
+            f"What is said in the clip: \"{text}\"\n\n"
+            f"Write the {_LAYER_FIELD_RULES[field]}\n"
+            "It is YOUR voice: never quote or paraphrase the dialogue (no 3-word run from the transcript), never "
+            "narrate what is on screen, no quotation marks, no emoji, nothing promotional, never mock anyone." + tried +
+            f'\nReturn ONLY JSON: {{"{field}": "..."}}')
+
+
+def layer_line(story, field, transcript, api_key, campaign='friends', avoid=None):
+    """One cheap Gemini ask for a missing originality line; None on any failure (never retried)."""
+    try:
+        payload = {'contents': [{'parts': [{'text': layer_line_prompt(story, field, transcript, campaign, avoid)}]}],
+                   'generationConfig': {'temperature': 0.5}}
+        data = _parse_json(_gemini_post(payload, api_key.strip(), timeout=45))
+        line = re.sub(r'\s+', ' ', str((data or {}).get(field) or '')).strip().strip('"')
+        return line or None
+    except Exception as e:
+        print(f"      {field} follow-up failed: {e}")
+        return None
 
 
 def candidates_prompt(sents, used_segments=None, used_storylines=None, campaign='friends', limits=(12, 40),

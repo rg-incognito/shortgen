@@ -17,14 +17,15 @@ from drive_client import (download_video, upload_shorts, pick_video, pick_from_f
 from transcriber import transcribe_video
 from analyzer import (analyze_candidates, generate_yt_metadata, build_sentences, build_candidate,
                       hook_problems, overlap_problems, rank_score, later_start, rubric_points, story_offset,
-                      HOOK_CLASSES, PAYOFF_MAX_TAIL, GENRES)
+                      trim_filler_opener, layer_line, HOOK_CLASSES, PAYOFF_MAX_TAIL, GENRES)
 from clipper import create_story_short, edited_duration
 from sheet_tracker import SheetTracker, SKIP_PREFIX
 from campaigns import (get_campaign, find_banned, find_transcript_banned, enforce_caption,
                        next_publish_time, publish_plan, window_publish_time, episode_campaign, SLOT_GUARD_MIN,
                        tidy_title, title_problems, clean_hashtags, header_problems, overlay_checks,
                        render_config, length_plan, story_max_seconds, layer_caps, rubric_gate, clip_text,
-                       assign_variant, apply_variant, EXPERIMENTS, moment_hints, quote_problems, episode_guest)
+                       assign_variant, apply_variant, EXPERIMENTS, moment_hints, quote_problems, episode_guest,
+                       fallback_layer_lines, layer_line_problem, layer_names, faithful_problems, _EMOJI)
 from footage import download_from_release, sponsor_segments
 
 try:   # render side (Coder B); absent until that branch is merged
@@ -137,6 +138,10 @@ def _burned_text_scan(story, video_path, attempt=1):
     return []
 
 
+def _no_emoji(text):
+    return ' '.join(_EMOJI.sub('', str(text or '')).split())
+
+
 def _apply_layers(story, all_words, profile):
     """
     Validate the originality layer: drop any overlay line that echoes the
@@ -144,8 +149,17 @@ def _apply_layers(story, all_words, profile):
     reality/drama only. Returns hard problems (a header that echoes the
     dialogue). Sets story['_layers'] to the lines that survived.
     """
+    # On-screen lines are drawn in Montserrat: an emoji renders as a monochrome outline glyph
+    for field in ('context_line', 'closing_line'):
+        if story.get(field):
+            story[field] = _no_emoji(story[field]) or None
     if all_words:
         story['_clip_text'] = clip_text(story, all_words)   # metadata checks quotes against it
+        # words said before the punchline sentence: setup, not spoiler (header_problems)
+        ps = story.get('_payoff_start')
+        if ps is not None:
+            story['_setup_text'] = ' '.join(w['word'] for c in story['clips'] for w in all_words
+                                            if c['start_seconds'] <= w['start'] < min(c['end_seconds'], ps))
     # A brief can limit which overlay lines it allows (tonyhawk: header + closing line only).
     allowed = profile.get('overlay_fields')
     if allowed is not None:
@@ -164,13 +178,81 @@ def _apply_layers(story, all_words, profile):
         print(f"      ~ {story.get('storyline_title', '?')}: dropped {field} ({why})")
     for field in ('context_line', 'closing_line'):
         if field in bad:
+            # the follow-up ask is told not to repeat it
+            story.setdefault('_layer_tried', {}).setdefault(field, []).append(story[field])
             story[field] = None
     genre = profile.get('genre') or 'sitcom'
     story['annotations'] = [a for a in story.get('annotations') or []
                             if f"annotation@{a['t']:.1f}" not in bad and genre in ('reality', 'drama')]
-    story['_layers'] = ([k for k in ('context_line', 'closing_line') if story.get(k)]
-                        + (['annotations'] if story['annotations'] else []))
+    story['_layers'] = _layer_fields(story)
     return problems
+
+
+def _layer_fields(story):
+    return ([k for k in ('context_line', 'closing_line') if story.get(k)]
+            + (['annotations'] if story.get('annotations') else []))
+
+
+def _layer_needs(story, profile):
+    """
+    Originality lines this candidate still needs: any field the brief requires
+    (required_layers), or, when the campaign shows overlays and none survived
+    (and the layer is not optional), one line of the genre's primary kind.
+    """
+    have = story.get('_layers') or []
+    allowed = profile.get('overlay_fields')
+    allowed = [f for f in ('context_line', 'closing_line') if allowed is None or f in allowed]
+    need = [f for f in profile.get('required_layers') or [] if f in allowed and f not in have]
+    if (not need and not have and allowed and render_config(profile).get('overlays_allowed')
+            and not profile.get('layers_optional')):
+        talk = (profile.get('genre') or 'sitcom') in ('podcast', 'talk')
+        need = ['context_line' if talk and 'context_line' in allowed else
+                'closing_line' if 'closing_line' in allowed else allowed[0]]
+    return need
+
+
+def _fill_layers(story, all_words, profile, ask=None):
+    """
+    Fill an originality line the LLM omitted or that was dropped, instead of
+    throwing a good candidate away. Without ask: safe lines derived from the
+    LLM's own fields (stake_line / header / summary as a context line; a genre
+    question as a closing line). With ask(field, rejected) -> line: the one
+    cheap follow-up to Gemini. Every line passes the same overlay checks.
+    Returns the fields filled.
+    """
+    need = _layer_needs(story, profile)
+    if not need:
+        return []
+    transcript, names = layer_names(story, all_words, profile)
+    filled = []
+    for field in need:
+        tried = story.setdefault('_layer_tried', {}).setdefault(field, [])
+        options = ([_no_emoji(ask(field, [t for t in tried if t]))] if ask
+                   else fallback_layer_lines(story, field, profile))
+        for text in options:
+            if not text or text in tried:
+                continue
+            why = layer_line_problem(field, text, transcript, names, profile)
+            if why:
+                tried.append(text)
+                continue
+            story[field] = text
+            src = 'follow-up ask' if ask else 'derived'
+            story.setdefault('_layer_fallback', {})[field] = src
+            print(f"      ~ {story.get('storyline_title', '?')}: {field} filled ({src}): {text!r}")
+            filled.append(field)
+            break
+    story['_layers'] = _layer_fields(story)
+    return filled
+
+
+def _is_layer_problem(p):
+    return p.startswith('no originality layer survived') or (p.startswith('required ') and 'missing or dropped' in p)
+
+
+def _trims_filler(profile):
+    """Podcast / talk: a leading filler word is trimmed off the opener instead of rejecting it."""
+    return profile.get('trim_filler', render_config(profile).get('niche') == 'B')
 
 
 def _v2_problems(story, profile, gate):
@@ -183,7 +265,8 @@ def _v2_problems(story, profile, gate):
         problems.append("opens on slow setup (hook_class SL)")
     if story.get('_payoff_tail', 0) > PAYOFF_MAX_TAIL:
         problems.append(f"ends {story['_payoff_tail']:.1f}s after the payoff (max {PAYOFF_MAX_TAIL:g}s)")
-    if render_config(profile).get('overlays_allowed') and not story.get('_layers'):
+    if (render_config(profile).get('overlays_allowed') and not story.get('_layers')
+            and not profile.get('layers_optional')):
         problems.append("no originality layer survived (closing/context line or annotations)")
     for field in profile.get('required_layers') or []:
         if field not in (story.get('_layers') or []):
@@ -262,8 +345,16 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
                 continue
             if not render_config(profile).get('header'):
                 problems = [p for p in problems if p != 'missing header']
+            if _trims_filler(profile):
+                trimmed = trim_filler_opener(story, sents, all_words)
+                if trimmed:
+                    print(f"      ~ {story['storyline_title']}: trimmed filler \"{trimmed['_filler_trim']}\" -> "
+                          f"\"{trimmed['opening_line'][:50]}\"")
+                    story = trimmed
             if story['_v2'] and (story.get('hook_class') == 'SL' or hook_problems(story, sents, all_words)):
                 alt = later_start(story, sents, all_words)
+                if alt and _trims_filler(profile):
+                    alt = trim_filler_opener(alt, sents, all_words) or alt
                 if alt and not hook_problems(alt, sents, all_words):
                     a, k = alt['_later_start']
                     print(f"      ~ {story['storyline_title']}: later start S{a} -> S{k} "
@@ -275,13 +366,24 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
             story['_edited_seconds'] = round(dur, 1)
             story['_max_seconds'] = story_max_seconds(story, profile)
             problems += _apply_layers(story, all_words, profile)
+            _fill_layers(story, all_words, profile)
             if story['_v2']:
                 o_cap = 1 if story['_layers'] == ['annotations'] else originality_cap
                 story['_rubric'], story['_rubric_pts'] = rubric_points(
                     story, dur, framing_cap, min(o_cap, originality_cap), long_arc=story['_max_seconds'] > hi)
             story['score'] = rank_score(story, dur, target)
-            problems += _candidate_problems(story, sents, all_words, used, profile, video_path=video_path,
-                                            attempt=attempt, prior_headers=prior_headers, gate=gate)
+            base = list(problems)
+            problems = base + _candidate_problems(story, sents, all_words, used, profile, video_path=video_path,
+                                                  attempt=attempt, prior_headers=prior_headers, gate=gate)
+            # Only a missing originality line stands between this candidate and a pass:
+            # one cheap follow-up ask before it is thrown away.
+            if problems and gemini_api_key and all(_is_layer_problem(p) for p in problems):
+                ask = lambda field, tried, s=story: layer_line(s, field, s.get('_clip_text') or '', gemini_api_key,
+                                                               campaign, tried)
+                if _fill_layers(story, all_words, profile, ask=ask):
+                    problems = base + _candidate_problems(story, sents, all_words, used, profile,
+                                                          video_path=video_path, attempt=attempt,
+                                                          prior_headers=prior_headers, gate=gate)
             ranked.append((story, problems))
             avoid += [seg for seg in ((c['start_seconds'], c['end_seconds']) for c in story['clips'])
                       if seg not in avoid]
@@ -328,12 +430,20 @@ def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior
     campaign_titles = [t for ep, t in prior_titles if episode_campaign(ep) == campaign]
     fallback = vague_fallback = None
     guest = episode_guest(profile, episode_name)
-    notes_kw = {'notes': f"Guest in this clip: {guest} (name them in the title or caption)."} if guest else {}
+    note = f"Guest in this clip: {guest} (name them in the title or caption)." if guest else ''
     finish = lambda m: clean_hashtags(enforce_caption(m, profile, episode_name), profile, episode_name)
+    # Title faithfulness: the clip's own words go into the prompt, and a title that adds a
+    # person or role the clip never mentions ("her boss") is rejected and retried.
+    transcript = story.get('_clip_text')
+    known = ' '.join([guest or ''] + list(profile.get('title_names') or []) + list(profile.get('cast_names') or []))
+    feedback = ''
     for attempt in range(1, attempts + 1):
+        notes = ' '.join(x for x in (note, feedback) if x)
         yt_meta = generate_yt_metadata(story, episode_name, gemini_api_key, campaign=campaign,
                                        title_names=profile.get('title_names'),
-                                       recent_titles=campaign_titles[-30:], **notes_kw)
+                                       recent_titles=campaign_titles[-30:],
+                                       **({'notes': notes} if notes else {}),
+                                       **({'transcript': transcript} if transcript else {}))
         if not yt_meta:
             break
         yt_meta['title'] = tidy_title(str(yt_meta.get('title', '')))
@@ -347,9 +457,13 @@ def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior
             misquoted = quote_problems(text, story['_clip_text'])
             if misquoted:
                 hard.append(f"quotes words not said in the clip {misquoted}")
+        hard += faithful_problems(yt_meta, transcript, profile, known)
+        yt_meta.pop('title_check', None)
         if not hard and not soft:
             return finish(yt_meta)
         print(f"      Metadata attempt {attempt} rejected ({yt_meta['title']!r}): {'; '.join(hard + soft)}")
+        if hard:
+            feedback = f'A previous title was rejected ({"; ".join(hard)}): write a different one.'
         if not hard and not fallback:
             fallback = yt_meta
         # Metadata runs after the render: a title whose only hard issue is a vague word

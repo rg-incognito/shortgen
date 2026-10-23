@@ -329,8 +329,10 @@ CAMPAIGNS = {
         'max_runs':        3,
         'archive':         False,    # files belong to the brand's Drive
         'silence_thresh':  0.45,     # scripted comedy: keep the timing, cut only dead air
-        # Brief: 15-35 s (niche A caps it at 32 s anyway).
-        'min_seconds':     15.0,
+        # The brief sets no minimum and the finale is 117 s of quick bits: a complete
+        # 10-12 s bit is a clip (the first run rejected every 11.5-12.6 s candidate).
+        'min_seconds':     9.5,
+        'target_seconds':  (12, 25),
         'max_seconds':     35.0,
         'playlist':        'Tony Stock: Pro Trader',
         # Skate / comedy crowd: late-evening scroll.
@@ -342,6 +344,16 @@ CAMPAIGNS = {
         # is promotional: header (whole clip) + closing line only, no context card, no handle.
         'render':          _render('A', overlays_allowed=True, names=['Tony', 'Hawk', 'Bam', 'Margera']),
         'overlay_fields':  ['closing_line'],
+        # The header carries the framing; a closing line is welcome but not required.
+        'layers_optional': True,
+        # Only the punchline's own words spoil it: the bit's topic (trading, the desk, the
+        # chaos) is the situation the header has to name. Topic words are not echoes either.
+        'spoiler_scope':   'punchline',
+        'topic_words':     ['trading', 'trade', 'trades', 'trader', 'traders', 'stock', 'stocks',
+                            'market', 'markets', 'desk', 'floor', 'chaos', 'money', 'finance', 'wall', 'street',
+                            'skate', 'skating', 'skateboard', 'board', 'finale', 'livestream', 'pro'],
+        # A situation header shares words with a scripted bit; only a near-transcription is an echo.
+        'header_echo_share': 0.6,
         # A native 9:16 source (the recap cuts) goes full-bleed: the A1 4:5 window would
         # crop away a third of an already-vertical frame.
         'vertical_template': 'A2',
@@ -405,6 +417,7 @@ CAMPAIGNS = {
         # render keeps on screen start to end on B1 (the header band exists on A1 only).
         # handle_required keeps it through the QA safe re-encode; handle_size makes it legible.
         'render':          _render('B', overlays_allowed=True, handle='BILF Podcast', handle_required=True,
+                                   context_required=True,
                                    handle_size=44, names=['Mara', 'Suneera', 'Alli', 'Andrea', 'BILF']),
         # The text hook in the first 2 s is the context card.
         'required_layers': ['context_line'],
@@ -901,8 +914,15 @@ def header_problems(story, profile, prior_headers=()):
     names = _names(profile) + _proper_nouns(story.get('reveal'), anywhere=True)
     for k in ('payoff_line', '_payoff_text'):
         names += _proper_nouns(story.get(k))
-    spoil_src = ' '.join(str(story.get(k) or '') for k in ('payoff_line', '_payoff_text', 'reveal'))
-    spoils = sorted(content_words(spoil_src, names) & content_words(header, names))
+    if profile.get('spoiler_scope') == 'punchline':
+        # Only the punchline sentence's own words: not the reveal summary, not the topic
+        # words, not words the clip already said before the punchline (that is the setup).
+        names += list(profile.get('topic_words') or [])
+        punch = content_words(story.get('_payoff_text') or story.get('payoff_line'), names)
+        spoils = sorted((punch - content_words(story.get('_setup_text'), names)) & content_words(header, names))
+    else:
+        spoil_src = ' '.join(str(story.get(k) or '') for k in ('payoff_line', '_payoff_text', 'reveal'))
+        spoils = sorted(content_words(spoil_src, names) & content_words(header, names))
     if spoils:
         problems.append(f'header gives away the payoff {spoils}')
     banned = find_banned(header, profile)
@@ -918,29 +938,148 @@ def header_problems(story, profile, prior_headers=()):
 def _tokens(text, names=()):
     skip = {w.replace("'", '') for name in names for w in norm_title(name).split()}
     return [w for w in re.findall(r"[a-z0-9']+", (text or '').lower().replace("'", ''))
-            if len(w) >= 3 and w not in _STOP and w not in skip and not (w.endswith('s') and w[:-1] in skip)]
+            if len(w) >= 3 and w not in _STOP and w not in _FUNCTION and w not in skip
+            and not (w.endswith('s') and w[:-1] in skip)]
 
 
-def echo_problem(text, transcript, names=()):
+# A run of these short function words is not a quote ("out of the", "in the room").
+_FUNCTION = {'out', 'off', 'the', 'and', 'but', 'for', 'not', 'are', 'was', 'her', 'his', 'him', 'she', 'you',
+             'who', 'how', 'why', 'all', 'one', 'our', 'its', 'own', 'too', 'has', 'had', 'got', 'get', 'can'}
+
+
+def echo_problem(text, transcript, names=(), share_max=0.4, gram=3, min_said=1):
     """
     Why an overlay line only repeats the dialogue (it must add a voice, not a
-    transcription): any shared 3-word run that is not all stop-words, or 40%+
-    of its content words spoken in the clip. None if it is original.
+    transcription): any shared `gram`-word run that is not all stop-words, or
+    share_max+ of its content words (and at least min_said of them) spoken in
+    the clip. None if it is original.
     """
     words = re.findall(r"[a-z0-9']+", (text or '').lower().replace("'", ''))
     spoken = re.findall(r"[a-z0-9']+", (transcript or '').lower().replace("'", ''))
-    grams = {tuple(spoken[i:i + 3]) for i in range(len(spoken) - 2)}
-    for i in range(len(words) - 2):
-        g = tuple(words[i:i + 3])
-        if g in grams and not all(w in _STOP or len(w) < 3 for w in g):
+    grams = {tuple(spoken[i:i + gram]) for i in range(len(spoken) - gram + 1)}
+    # a 3-word run counts with one content word; a longer run needs two ("out of the room" is not a quote)
+    need = 1 if gram <= 3 else 2
+    # names (and a profile's topic words) are not quoted content: "the trading desk" is the topic
+    skip = {w.replace("'", '') for name in names for w in norm_title(name).split()}
+    filler = lambda w: w in _STOP or len(w) < 3 or w in skip or w in _FUNCTION
+    for i in range(len(words) - gram + 1):
+        g = tuple(words[i:i + gram])
+        if g in grams and sum(not filler(w) for w in g) >= need:
             return f'repeats the line "{" ".join(g)}"'
+    # any 5 words in a row from the clip are a quote, however plain the words
+    five = {tuple(spoken[i:i + 5]) for i in range(len(spoken) - 4)}
+    for i in range(len(words) - 4):
+        if tuple(words[i:i + 5]) in five:
+            return f'repeats the line "{" ".join(words[i:i + 5])}"'
     toks = _tokens(text, names)
     said = set(_tokens(transcript, names))
     if toks:
-        share = sum(t in said for t in toks) / len(toks)
-        if share >= 0.4:
+        n_said = sum(t in said for t in toks)
+        share = n_said / len(toks)
+        if share >= share_max and n_said >= min_said:
             return f'{share:.0%} of its words are spoken in the clip'
     return None
+
+
+# A context line describes the situation, so it naturally names what is talked about
+# ("Stax founder on being laughed out of the room"): only a near-quote is an echo.
+CONTEXT_ECHO = dict(share_max=0.75, gram=4, min_said=3)
+
+
+def layer_line_problem(field, text, transcript, names, profile):
+    """Why one originality line (context_line / closing_line / annotation) cannot be shown, or None."""
+    exempt = profile.get('vague_exempt', ())
+    why = echo_problem(text, transcript, names, **(CONTEXT_ECHO if field == 'context_line' else {}))
+    banned = find_banned(text, profile)
+    misquoted = quote_problems(text, transcript) if profile.get('verbatim_quotes') else []
+    if banned:
+        why = f'banned words {banned}'
+    elif misquoted:
+        why = f'quotes words not said in the clip {misquoted}'
+    elif not why and field == 'context_line' and vague_hits(text, exempt):
+        why = f'vague words {vague_hits(text, exempt)}'
+    return why
+
+
+def layer_names(story, all_words, profile):
+    """(transcript, names) the overlay checks use: naming who is on screen or the topic is not an echo."""
+    transcript = clip_text(story, all_words) if all_words else ' '.join(
+        str(story.get(k) or '') for k in ('opening_line', 'payoff_line'))
+    names = _names(profile) + _proper_nouns(transcript) + list(profile.get('topic_words') or [])
+    return transcript, names
+
+
+# Safe closing lines when the LLM's was missing or dropped: an open question adds the
+# viewer's voice without quoting anyone. Context lines come from the LLM's own fields.
+FALLBACK_CLOSERS = {
+    'podcast': ['Would you have done the same?', 'Agree or disagree?', 'What would you have done?'],
+    'sitcom':  ['Whose side are you on?', 'Who was right here?', 'Who handled that worse?'],
+    'reality': ['Who was in the wrong here?', 'Whose side are you on?', 'Would you have stayed?'],
+}
+FALLBACK_CLOSERS['talk'] = FALLBACK_CLOSERS['podcast']
+FALLBACK_CLOSERS['drama'] = FALLBACK_CLOSERS['reality']
+
+
+def _sentence_case(text):
+    text = re.sub(r'\s+', ' ', str(text or '')).strip().rstrip('.')
+    if text and text.upper() == text:          # an ALL CAPS header
+        text = text.lower()
+        text = text[:1].upper() + text[1:]
+    return text
+
+
+def fallback_layer_lines(story, field, profile):
+    """
+    Candidate lines for a missing originality field, best first: for
+    context_line the LLM's own stake_line, header and summary (4-10 words);
+    for closing_line a genre question.
+    """
+    if field == 'closing_line':
+        return list(FALLBACK_CLOSERS.get(profile.get('genre') or 'sitcom', FALLBACK_CLOSERS['sitcom']))
+    out = []
+    for key in ('stake_line', 'header', 'storyline_summary'):
+        text = _sentence_case(story.get(key))
+        # restore proper names the ALL CAPS header lowered (profile names and cast)
+        for name in _names(profile):
+            text = re.sub(rf"\b{re.escape(name.lower())}\b", name, text, flags=re.IGNORECASE)
+        if 4 <= len(text.split()) <= 10 and text not in out and '"' not in text:
+            out.append(text)
+    return out
+
+
+ROLE_WORDS = {'boss', 'bosses', 'manager', 'husband', 'wife', 'boyfriend', 'girlfriend', 'fiance', 'fiancee',
+              'mom', 'mother', 'dad', 'father', 'son', 'daughter', 'sister', 'brother', 'ex', 'coworker',
+              'coworkers', 'colleague', 'colleagues', 'employee', 'employees', 'investor', 'investors', 'ceo',
+              'cop', 'police', 'teacher', 'doctor', 'lawyer', 'therapist', 'mentor', 'landlord', 'neighbor',
+              'kids', 'kid', 'children', 'parents', 'grandma', 'grandpa', 'stranger', 'billionaire', 'millionaire'}
+_ROLE_KIN = {'mom': {'mother', 'mum', 'mama'}, 'mother': {'mom', 'mum', 'mama'}, 'dad': {'father', 'papa'},
+             'father': {'dad', 'papa'}, 'kids': {'kid', 'children', 'son', 'daughter'},
+             'kid': {'kids', 'children'}, 'children': {'kids', 'kid'}, 'boss': {'bosses'}, 'bosses': {'boss'},
+             'coworker': {'coworkers', 'colleague'}, 'coworkers': {'coworker', 'colleagues'}}
+
+
+def faithful_problems(meta, transcript, profile=None, extra=''):
+    """
+    Hard problems when the metadata claims something the clip does not say:
+    a person or role (boss, husband, investor...) that never appears in the
+    clip transcript (or extra: the guest/episode notes), or the model's own
+    title_check saying the title adds something unsupported.
+    """
+    if not transcript:
+        return []
+    said = set(re.findall(r"[a-z]+", (transcript + ' ' + (extra or '')).lower().replace("'s ", ' ')))
+    title = str(meta.get('title') or '')
+    problems = []
+    added = []
+    for w in re.findall(r"[a-z]+", title.lower().replace("'s ", ' ').replace("’s ", ' ')):
+        if w in ROLE_WORDS and w not in said and not (_ROLE_KIN.get(w, set()) & said):
+            added.append(w)
+    if added:
+        problems.append(f"title adds {sorted(set(added))}, not in the clip")
+    check = meta.get('title_check')
+    if isinstance(check, dict) and check.get('adds_unsupported') in (True, 'true', 'True'):
+        problems.append('title_check says the title adds something the clip does not say')
+    return problems
 
 
 def overlay_checks(story, all_words, profile):
@@ -949,14 +1088,11 @@ def overlay_checks(story, all_words, profile):
     closing_line, each annotation) that echoes the clip or uses a banned or
     vague term, plus 'header' if the header echoes the dialogue.
     """
-    transcript = clip_text(story, all_words) if all_words else ' '.join(
-        str(story.get(k) or '') for k in ('opening_line', 'payoff_line'))
-    names = _names(profile) + _proper_nouns(transcript)   # naming who is on screen is not an echo
-    exempt = profile.get('vague_exempt', ())
+    transcript, names = layer_names(story, all_words, profile)
     bad = {}
     header = story.get('header') or story.get('hook_text')
     if header:
-        why = echo_problem(header, transcript, names)
+        why = echo_problem(header, transcript, names, share_max=profile.get('header_echo_share', 0.4))
         if why:
             bad['header'] = why
     lines = [(k, story.get(k)) for k in ('context_line', 'closing_line')]
@@ -964,15 +1100,7 @@ def overlay_checks(story, all_words, profile):
     for field, text in lines:
         if not text:
             continue
-        why = echo_problem(text, transcript, names)
-        banned = find_banned(text, profile)
-        misquoted = quote_problems(text, transcript) if profile.get('verbatim_quotes') else []
-        if banned:
-            why = f'banned words {banned}'
-        elif misquoted:
-            why = f'quotes words not said in the clip {misquoted}'
-        elif not why and field == 'context_line' and vague_hits(text, exempt):
-            why = f'vague words {vague_hits(text, exempt)}'
+        why = layer_line_problem(field, text, transcript, names, profile)
         if why:
             bad[field] = why
     return bad
@@ -988,7 +1116,7 @@ def length_plan(profile):
     niche = NICHE_LENGTH[render_config(profile).get('niche', 'A')]
     lo = profile.get('min_seconds') or 12.0
     hi = min(profile.get('max_seconds') or niche['max'], niche['max'])
-    t_lo, t_hi = niche['target']
+    t_lo, t_hi = profile.get('target_seconds') or niche['target']
     t_lo = max(t_lo, lo)
     return lo, hi, (t_lo, max(t_lo, min(t_hi, hi)))
 

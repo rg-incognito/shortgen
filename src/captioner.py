@@ -61,6 +61,14 @@ _CAPTION_LEAD    = 0.08   # show slightly before the word is spoken
 _LOUD_I, _LOUD_TP, _LOUD_LRA = -14.0, -2.0, 11.0
 # Peak limiter ahead of loudnorm (dBFS); lowered per clip until linear mode holds.
 _LIMIT_DB = -2.05      # = alimiter limit 0.79
+# The AAC encode adds inter-sample overshoot on top of loudnorm's -2 dBTP
+# (BILF measured -1.18 dBTP): the finished file is re-measured and, above this
+# ceiling, its audio is re-encoded once with a lower true-peak target.
+_TP_CEIL = -1.5
+_TP_MARGIN = 0.3
+_TP_TRIM_MAX = 0.6       # last resort linear trim (LUFS -14 -> at most -14.6)
+_TP_POST = 0.3              # oversampled limiter this far under the target (AAC adds ~0.25 dB)
+_TP_SAMPLE_MARGIN = 0.6    # sample-peak limiter -> true peak (measured +0.5 dB on BILF speech)
 _AUDIO_ARGS = ['-ac', '2', '-ar', '48000', '-c:a', 'aac', '-b:a', '192k']
 _VIDEO_ARGS = ['-c:v', 'libx264', '-preset', 'slow', '-crf', '18',
                '-pix_fmt', 'yuv420p', '-movflags', '+faststart']
@@ -355,7 +363,7 @@ _PRESETS = {
     # cap px, max words, max chars, lines, centre pop on entry
     'tv':        dict(cap=64, words=3, chars=14, lines=1, pop=False),
     'talk':      dict(cap=64, words=3, chars=14, lines=1, pop=True),
-    'full_subs': dict(cap=56, words=7, chars=30, lines=2, pop=False, line_chars=17),
+    'full_subs': dict(cap=62, words=7, chars=30, lines=2, pop=False, line_chars=17),
 }
 _TEMPLATE_CAPTION_Y = {'A1': 1160, 'A2': 1160, 'B1': 960}   # \an5 centre per template
 _CAP_X2       = 530       # centre x: the chunk (max 800 wide) stays left of the right rail
@@ -855,6 +863,7 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
         if p.returncode != 0:
             raise subprocess.CalledProcessError(p.returncode, cmd, p.stdout, p.stderr)
         info['normalization_type'] = _norm_type(p.stderr)
+        _cap_true_peak(video_path, output_path, info)
         info['allowed_boxes'] = allowed
         info['caption_y'] = cy
         info['closing'] = script_ov.get('closing_start')
@@ -893,7 +902,19 @@ def _norm_type(stderr):
     return m.group(1) if m else None
 
 
-def _loudness_chain(video_path):
+def _tp_guard(tp):
+    """
+    True-peak guard after loudnorm: limit at 4x oversampling (192 kHz sample
+    peaks ~ true peaks) _TP_POST under the target, then back to 48 kHz. The
+    linear loudnorm output still overshot by ~1 dB (inter-sample peaks of the
+    sample-peak-limited speech, then the AAC encode): BILF -1.18 / -1.36 dBTP.
+    Measured on the BILF clip: -2.06 dBTP after AAC, loudness -14.08 LUFS.
+    """
+    return (f",aresample=192000,alimiter=limit={10 ** ((tp - _TP_POST) / 20):.4f}"
+            f":attack=1:release=50:level=disabled,aresample=48000")
+
+
+def _loudness_chain(video_path, tp=_LOUD_TP):
     """
     Peak limiter + two-pass linear loudnorm, so speech and laugh-track dynamics
     survive. loudnorm only runs linear when (measured TP + gain) <= target TP;
@@ -902,30 +923,82 @@ def _loudness_chain(video_path):
     shaves the few peaks that would block linear mode, lowered until the
     measurement predicts linear (at most 3 tries).
     Returns (filter, info) with info = limit_db and predicted mode.
+
+    The loudness gain is applied BEFORE the limiter, so the limiter works near
+    0 dBFS: on quiet sources (podcasts at ~-34 LUFS) a limit of -22..-24 dB hit
+    alimiter's floor (0.0625 = -24 dB) and peaks slipped through. alimiter is a
+    sample-peak limiter, so it sits _TP_SAMPLE_MARGIN under the true-peak target.
+    After loudnorm, _tp_guard limits again at 4x oversampling (= true peak).
     """
     try:
         st = _measure_loudness(video_path)
     except (AttributeError, KeyError, ValueError):
-        return f"loudnorm=I={_LOUD_I}:TP={_LOUD_TP}:LRA={_LOUD_LRA},aresample=48000", {'limit_db': None}
+        return f"loudnorm=I={_LOUD_I}:TP={tp}:LRA={_LOUD_LRA}" + _tp_guard(tp), {"limit_db": None}
     gain = _LOUD_I - float(st['input_i'])
-    limit_db = min(_LIMIT_DB, _LOUD_TP - gain - 0.5)
+    vol = f"volume={gain:.2f}dB," if abs(gain) >= 0.05 else ""
+    limit_db = min(_LIMIT_DB + (tp - _LOUD_TP), tp - _TP_SAMPLE_MARGIN)
     for _ in range(3):
-        pre = (f"alimiter=limit={10 ** (limit_db / 20):.4f}:attack=5:release=50:level=disabled"
-               if limit_db < 0 else "")
+        limit_db = max(limit_db, -23.5)              # alimiter's floor is -24 dB
+        pre = f"{vol}alimiter=limit={10 ** (limit_db / 20):.4f}:attack=5:release=50:level=disabled"
         try:
             st = _measure_loudness(video_path, pre)
         except (AttributeError, KeyError, ValueError):
             break
-        over = float(st['input_tp']) + (_LOUD_I - float(st['input_i'])) - _LOUD_TP
+        over = float(st['input_tp']) + (_LOUD_I - float(st['input_i'])) - tp
         if over <= 0:
             break
         limit_db -= over + 0.2
     lra = min(20.0, max(_LOUD_LRA, float(st['input_lra']) + 1.0))
-    ln = (f"loudnorm=I={_LOUD_I}:TP={_LOUD_TP}:LRA={lra:.1f}"
+    ln = (f"loudnorm=I={_LOUD_I}:TP={tp:.2f}:LRA={lra:.1f}"
           f":measured_I={st['input_i']}:measured_TP={st['input_tp']}"
           f":measured_LRA={st['input_lra']}:measured_thresh={st['input_thresh']}"
-          f":offset={st['target_offset']}:linear=true:print_format=json,aresample=48000")
+          f":offset={st['target_offset']}:linear=true:print_format=json" + _tp_guard(tp))
     return (pre + "," if pre else "") + ln, {'limit_db': round(limit_db, 2)}
+
+
+def _cap_true_peak(source, output_path, info, ceil=_TP_CEIL):
+    """
+    Keep the finished file's true peak <= ceil: measure it and, if it is
+    over, re-encode only the audio (video stream copied) from `source` with
+    the true-peak target lowered by the overshoot. One retry; never raises.
+    Records true_peak (and tp_fixed) in info.
+    """
+    try:
+        tp = float(_measure_loudness(output_path)['input_tp'])
+    except Exception:
+        return info
+    info['true_peak'] = tp
+    if tp <= ceil:
+        return info
+    first, target, trim = tp, max(-9.0, _LOUD_TP - (tp - (ceil - _TP_MARGIN))), 0.0   # loudnorm: TP -9..0
+    af, _ = _loudness_chain(source, tp=round(target, 2))
+    stderr = ''
+    for step in range(2):
+        # 2nd pass (still over): a small linear trim after loudnorm, <= _TP_TRIM_MAX dB
+        # so the loudness stays inside the -14 +- 0.7 LUFS QA band
+        chain = af + (f",volume=-{trim:.2f}dB" if trim else "")
+        tmp = output_path + '.tp.mp4'
+        p = subprocess.run(['ffmpeg', '-y', '-i', os.path.abspath(output_path), '-i', os.path.abspath(source),
+                            '-map', '0:v', '-map', '1:a?', '-c:v', 'copy', '-af', chain, *_AUDIO_ARGS,
+                            '-movflags', '+faststart', tmp],
+                           capture_output=True, text=True, errors='replace')
+        if p.returncode != 0 or not os.path.exists(tmp):
+            print(f"  True peak {tp:.2f} dBTP: audio re-encode failed, kept")
+            break
+        os.replace(tmp, output_path)
+        stderr = p.stderr
+        try:
+            tp = float(_measure_loudness(output_path)['input_tp'])
+        except Exception:
+            break
+        if tp <= ceil:
+            break
+        trim = min(_TP_TRIM_MAX, tp - (ceil - _TP_MARGIN) + trim)
+    print(f"  True peak {first:.2f} dBTP > {ceil} -> audio re-encoded (TP target {target:.2f}"
+          f"{f', trim -{trim:.2f} dB' if trim else ''}): {tp:.2f} dBTP")
+    info.update(true_peak=tp, tp_fixed=round(first, 2), tp_trim_db=round(trim, 2),
+                normalization_type=_norm_type(stderr) or info.get('normalization_type'))
+    return info
 
 
 def _loudnorm_filter(video_path):
@@ -978,6 +1051,7 @@ def _final_encode(video_path, output_path, hook_png, mapped):
         if p.returncode != 0:
             raise subprocess.CalledProcessError(p.returncode, cmd, p.stdout, p.stderr)
         info['normalization_type'] = _norm_type(p.stderr)
+        _cap_true_peak(video_path, output_path, info)
         return info
     finally:
         shutil.rmtree(work, ignore_errors=True)
