@@ -25,7 +25,7 @@ from campaigns import (get_campaign, find_banned, find_transcript_banned, enforc
                        tidy_title, title_problems, clean_hashtags, header_problems, overlay_checks,
                        render_config, length_plan, story_max_seconds, layer_caps, rubric_gate, clip_text,
                        assign_variant, apply_variant, EXPERIMENTS, moment_hints, quote_problems, episode_guest,
-                       fallback_layer_lines, layer_line_problem, layer_names, faithful_problems)
+                       fallback_layer_lines, layer_line_problem, layer_names, faithful_problems, _EMOJI)
 from footage import download_from_release, sponsor_segments
 
 try:   # render side (Coder B); absent until that branch is merged
@@ -138,6 +138,10 @@ def _burned_text_scan(story, video_path, attempt=1):
     return []
 
 
+def _no_emoji(text):
+    return ' '.join(_EMOJI.sub('', str(text or '')).split())
+
+
 def _apply_layers(story, all_words, profile):
     """
     Validate the originality layer: drop any overlay line that echoes the
@@ -145,6 +149,10 @@ def _apply_layers(story, all_words, profile):
     reality/drama only. Returns hard problems (a header that echoes the
     dialogue). Sets story['_layers'] to the lines that survived.
     """
+    # On-screen lines are drawn in Montserrat: an emoji renders as a monochrome outline glyph
+    for field in ('context_line', 'closing_line'):
+        if story.get(field):
+            story[field] = _no_emoji(story[field]) or None
     if all_words:
         story['_clip_text'] = clip_text(story, all_words)   # metadata checks quotes against it
         # words said before the punchline sentence: setup, not spoiler (header_problems)
@@ -219,7 +227,8 @@ def _fill_layers(story, all_words, profile, ask=None):
     filled = []
     for field in need:
         tried = story.setdefault('_layer_tried', {}).setdefault(field, [])
-        options = [ask(field, [t for t in tried if t])] if ask else fallback_layer_lines(story, field, profile)
+        options = ([_no_emoji(ask(field, [t for t in tried if t]))] if ask
+                   else fallback_layer_lines(story, field, profile))
         for text in options:
             if not text or text in tried:
                 continue
