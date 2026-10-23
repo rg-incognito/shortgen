@@ -12,6 +12,14 @@ Pipeline:
      before switching, snaps (no pan) on camera cuts and speaker switches
   5. ffmpeg pipe — renders video-only 1080x1920 frames; the area under the
      hook banner (top_reserved px) is left black for the banner to cover
+
+Templates (layout=, from the profile's render config; 'legacy' = the above):
+  A1  sitcom / reality: a 1080x1350 (4:5) window at y 300 over a blurred,
+      darkened copy of the same frame; two-shots widen the window (1:1, then
+      the full source width) so both people stay in frame
+  A2 / B1  full-bleed 1080x1920; the face is zoomed to ~1/4 of the canvas
+      height (capped 1.35x) with the eye line near y 540
+Frames are never letterboxed with black bars.
 """
 import os
 import subprocess
@@ -67,6 +75,21 @@ _FLASH_FRAMES = 8
 # relative to the bigger one, too far apart to share one crop.
 _SPLIT_MIN_REL = 0.55
 _SPLIT_MIN_CROP = 0.35   # split panel crop height, min fraction of the frame
+
+# Templates. A1: 4:5 window over a blurred cover of the frame.
+A1_WINDOW = (300, 1350)        # y, height of the default 4:5 window
+A1_SQUARE = (420, 1080)        # two-shot window (1:1)
+A1_BAND_MID = 975              # centre of the window band (300..1650)
+_A1_ZOOM_MAX = 1.15            # single-face zoom cap inside the A1 window
+_A1_FACE_TARGET = 0.20         # face height / canvas the A1 zoom aims at
+_A1_EYE = 0.30                 # eye line at this share of the window height
+_BG_DIM = 0.60                 # A1 background brightness
+# Full-bleed (A2 / B1): face height target as a share of the 1920 canvas.
+_FB_FACE_TARGET = 0.25
+_FB_ZOOM_MAX = 1.35
+_FB_EYE = 0.28                 # eye line at ~y 540
+_HEAD_TOP_MIN = 140            # px: forehead stays below the Shorts icon row
+_EYE_L, _EYE_R = 159, 386      # upper-eyelid landmarks
 
 # MediaPipe Face Mesh landmark indices
 _NOSE_TIP  = 1
@@ -181,6 +204,9 @@ def _detect(landmarker, rgb, box=None):
         faces.append({'cx': (x0 + face_lms[_NOSE_TIP].x * bw) / W,
                       'cy': (min(ys) + max(ys)) / 2,
                       'h': max(ys) - min(ys), 'w': max(xs) - min(xs),
+                      'top': min(ys), 'bot': max(ys), 'x0': min(xs), 'x1': max(xs),
+                      'bx': (min(xs) + max(xs)) / 2,
+                      'ey': (y0 + (face_lms[_EYE_L].y + face_lms[_EYE_R].y) / 2 * bh) / H,
                       'lip': lip_open / face_h})
     return faces
 
@@ -233,12 +259,13 @@ def _shot_layout(samples, wide_fallback, crop_w_norm):
     return 'crop'
 
 
-def _track_shot(sample_items, speech_frames, fps):
+def _track_shot(sample_items, speech_frames, fps, key='cy', tracked=None, xkey='cx'):
     """
     Choose who the crop follows at each sample of one shot.
 
-    Returns [(frame, cx, cy, switched)] with cx/cy normalised; misses hold the
-    last position and samples before the first detection take the first face.
+    Returns [(frame, cx, y, switched)] with cx / y (face[key]) normalised;
+    misses hold the last position and samples before the first detection take
+    the first face. tracked: optional list that receives the followed faces.
     """
     hold = max(1, int(round(_SWITCH_HOLD_S * fps)))
     prev_faces = []
@@ -282,8 +309,10 @@ def _track_shot(sample_items, speech_frames, fps):
         out.append((fi, cur, switched))
 
     first = next((c for _, c, _ in out if c is not None), None)
-    return [(fi, (c or first)['cx'] if (c or first) else 0.5,
-             (c or first)['cy'] if (c or first) else 0.45, sw)
+    if tracked is not None:
+        tracked.extend(c for _, c, _ in out if c is not None)
+    return [(fi, (c or first).get(xkey, (c or first)['cx']) if (c or first) else 0.5,
+             (c or first).get(key, (c or first)['cy']) if (c or first) else 0.45, sw)
             for fi, c, sw in out]
 
 
@@ -349,37 +378,52 @@ def _blur_fill(frame, out_w, out_h):
     return bg
 
 
-def reframe_clip(video_path: str, start_sec: float, end_sec: float,
-                 output_path: str, pipeline=None, wide_fallback: bool = False,
-                 top_reserved: int = 0, zoom: float = 1.0, push_in: bool = False) -> None:
-    """
-    Produce a video-only 1080x1920 clip of round((end-start)*fps) frames. The
-    picture fills the whole area below top_reserved px (the hook banner area,
-    left black for the banner to cover) with a face-tracked crop.
+def _bg_cover(frame):
+    """A1 background: the frame's 9:16 centre, heavily blurred at 1/8 scale, dimmed."""
+    h, w = frame.shape[:2]
+    if w / h > _OUT_W / _OUT_H:
+        cw = int(h * _OUT_W / _OUT_H)
+        x = (w - cw) // 2
+        frame = frame[:, x:x + cw]
+    else:
+        ch = int(w * _OUT_H / _OUT_W)
+        y = (h - ch) // 2
+        frame = frame[y:y + ch]
+    small = cv2.resize(frame, (_OUT_W // 8, _OUT_H // 8), interpolation=cv2.INTER_AREA)
+    small = cv2.GaussianBlur(small, (0, 0), 5)
+    return cv2.convertScaleAbs(cv2.resize(small, (_OUT_W, _OUT_H), interpolation=cv2.INTER_LINEAR),
+                               alpha=_BG_DIM)
 
-    wide_fallback: podcast-style profiles. Shots with two separated faces become
-    a stacked split (left face on top, right face below); shots where no face is
-    found show the whole frame over a blurred fill instead of a blind crop.
-    zoom: punch-in factor (1.0 / 1.12) — clipper alternates it on jump cuts.
-    push_in: add a slow _PUSH_IN zoom across the part.
-    """
+
+def _pair(faces):
+    """Two biggest faces of similar size (each >= _SPLIT_MIN_REL of the other), or None."""
+    if len(faces) < 2:
+        return None
+    a, b = sorted(faces, key=lambda f: f['h'], reverse=True)[:2]
+    return (a, b) if b['h'] >= a['h'] * _SPLIT_MIN_REL else None
+
+
+def _eye_rect(cx, ey, cw, ch, src_w, src_h, eye_frac, top=None):
+    """Top-left of a cw x ch crop centred on cx with the eye line at eye_frac of
+    its height; the forehead (top, source px) stays _HEAD_TOP_MIN canvas px down."""
+    x1 = max(0.0, min(cx - cw / 2, src_w - cw))
+    y1 = ey - ch * eye_frac
+    if top is not None:
+        y1 = min(y1, top - ch * _HEAD_TOP_MIN / _OUT_H)
+    y1 = max(0.0, min(y1, src_h - ch))
+    return x1, y1
+
+
+def analyse_clip(video_path, start_sec, end_sec, pipeline=None, wide_fallback=False):
+    """Face samples, camera cuts and (optional) speech frames for one part."""
     rate, src_fps = probe_fps(video_path)
     cap = cv2.VideoCapture(video_path)
-    src_w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    src_h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
-
-    start_f      = int(round(start_sec * src_fps))
+    start_f = int(round(start_sec * src_fps))
     total_frames = max(1, int(round((end_sec - start_sec) * src_fps)))
 
-    content_h = _OUT_H - top_reserved
-    aspect    = _OUT_W / content_h
-    if src_w / src_h >= aspect:
-        base_ch, base_cw = float(src_h), src_h * aspect
-    else:
-        base_cw, base_ch = float(src_w), src_w / aspect
-
-    # --- Speaker diarization (optional) ---
     speech_frames: set = set()
     if pipeline is not None:
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
@@ -392,19 +436,30 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
         finally:
             os.unlink(wav_tmp)
 
-    # --- Face sampling + cut detection ---
     print('    Detecting faces, lip movement and camera cuts...')
     frame_data, cuts = _sample_faces(video_path, start_f, total_frames, src_fps,
                                      tiled=wide_fallback)
+    return {'video': video_path, 'rate': rate, 'fps': src_fps, 'src_w': src_w, 'src_h': src_h,
+            'start_f': start_f, 'total_frames': total_frames, 'faces': frame_data,
+            'cuts': cuts, 'speech': speech_frames, 'wide_fallback': wide_fallback}
 
-    # --- Per-shot layout + crop path ---
-    plan = [None] * total_frames   # per frame: ('crop', cx, cy) | ('split', l, r) | ('wide',)
-    for a, b in _shots(cuts, total_frames):
-        items  = [(fi, frame_data[fi]) for fi in sorted(frame_data) if a <= fi < b]
-        layout = _shot_layout([f for _, f in items], wide_fallback, base_cw / src_w)
+
+def _plan_legacy(an, top_reserved):
+    """Today's per-frame plan: full-width crop below the banner / split / wide."""
+    src_w, src_h, total = an['src_w'], an['src_h'], an['total_frames']
+    content_h = _OUT_H - top_reserved
+    aspect = _OUT_W / content_h
+    if src_w / src_h >= aspect:
+        base_ch, base_cw = float(src_h), src_h * aspect
+    else:
+        base_cw, base_ch = float(src_w), src_w / aspect
+    plan = [None] * total
+    for a, b in _shots(an['cuts'], total):
+        items = [(fi, an['faces'][fi]) for fi in sorted(an['faces']) if a <= fi < b]
+        layout = _shot_layout([f for _, f in items], an['wide_fallback'], base_cw / src_w)
         if layout == 'split':
             pairs = [p for p in (_split_pair(f, base_cw / src_w) for _, f in items) if p]
-            left  = {k: float(np.median([p[0][k] for p in pairs])) for k in ('cx', 'cy', 'h')}
+            left = {k: float(np.median([p[0][k] for p in pairs])) for k in ('cx', 'cy', 'h')}
             right = {k: float(np.median([p[1][k] for p in pairs])) for k in ('cx', 'cy', 'h')}
             for f in range(a, b):
                 plan[f] = ('split', left, right)
@@ -412,11 +467,123 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
             for f in range(a, b):
                 plan[f] = ('wide',)
         else:
-            track = _track_shot(items, speech_frames, src_fps)
+            track = _track_shot(items, an['speech'], an['fps'])
             for f, (cx, cy) in zip(range(a, b), _crop_path(track, a, b, src_w, src_h)):
                 plan[f] = ('crop', cx, cy)
+    return plan, base_cw, base_ch, content_h
+
+
+def _plan_template(an, layout):
+    """
+    Per-frame plan for the A1 / A2 / B1 templates.
+
+    Entries: ('win', cx, ey, zoom, win_y, win_h, cw, ch, top) — a face-placed
+    crop of cw x ch source px (before zoom) rendered into rows win_y..win_y+win_h;
+    or ('split', l, r) / ('wide',) as in the legacy plan (full-bleed only).
+    cx / ey / top in source px; ey None = no face, centre the crop.
+    """
+    src_w, src_h, total = an['src_w'], an['src_h'], an['total_frames']
+    if layout == 'A1':
+        win_y, win_h = A1_WINDOW
+    else:
+        win_y, win_h = 0, _OUT_H
+    aspect = _OUT_W / win_h
+    if src_w / src_h >= aspect:
+        base_ch, base_cw = float(src_h), src_h * aspect
+    else:
+        base_cw, base_ch = float(src_w), src_w / aspect
+
+    plan = [None] * total
+    for a, b in _shots(an['cuts'], total):
+        items = [(fi, an['faces'][fi]) for fi in sorted(an['faces']) if a <= fi < b]
+        samples = [f for _, f in items]
+
+        if layout != 'A1':
+            shot = _shot_layout(samples, an['wide_fallback'], base_cw / src_w)
+            if shot == 'split':
+                pairs = [p for p in (_split_pair(f, base_cw / src_w) for f in samples) if p]
+                left = {k: float(np.median([p[0][k] for p in pairs])) for k in ('cx', 'cy', 'h')}
+                right = {k: float(np.median([p[1][k] for p in pairs])) for k in ('cx', 'cy', 'h')}
+                for f in range(a, b):
+                    plan[f] = ('split', left, right)
+                continue
+            if shot == 'wide':
+                for f in range(a, b):
+                    plan[f] = ('wide',)
+                continue
+        else:
+            # A1 two-shot: widen the window until both faces fit (4:5 -> 1:1 -> full width)
+            pairs = [p for p in (_pair(f) for f in samples) if p]
+            if samples and len(pairs) * 2 >= len(samples):
+                x0 = float(np.median([min(p[0]['x0'], p[1]['x0']) for p in pairs])) * src_w
+                x1 = float(np.median([max(p[0]['x1'], p[1]['x1']) for p in pairs])) * src_w
+                need = (x1 - x0) * 1.25                       # breathing room either side
+                if need <= base_cw:
+                    cw, ch, wy, wh = base_cw, base_ch, win_y, win_h
+                elif need <= min(src_h, src_w):
+                    cw = ch = float(min(src_h, src_w))
+                    wy, wh = A1_SQUARE
+                else:
+                    cw, ch = float(src_w), float(src_h)
+                    wh = int(round(_OUT_W * src_h / src_w / 2)) * 2
+                    wy = A1_BAND_MID - wh // 2
+                for f in range(a, b):
+                    plan[f] = ('win', (x0 + x1) / 2, None, 1.0, wy, wh, cw, ch, None)
+                continue
+
+        tracked = []
+        # templates centre the face box (the nose tip sits off-centre on a turned head)
+        track = _track_shot(items, an['speech'], an['fps'], key='ey', tracked=tracked, xkey='bx')
+        if tracked:
+            fh = float(np.median([t['h'] for t in tracked])) * src_h       # face height, source px
+            dtop = float(np.median([t['ey'] - t['top'] for t in tracked])) * src_h
+            frac = fh / base_ch * (win_h / _OUT_H)                         # canvas share at zoom 1
+            target, cap = ((_A1_FACE_TARGET, _A1_ZOOM_MAX) if layout == 'A1'
+                           else (_FB_FACE_TARGET, _FB_ZOOM_MAX))
+            z = min(cap, max(1.0, target / frac)) if frac > 0 else 1.0
+            for f, (cx, ey) in zip(range(a, b), _crop_path(track, a, b, src_w, src_h)):
+                plan[f] = ('win', cx, ey, z, win_y, win_h, base_cw, base_ch, ey - dtop)
+        else:
+            for f in range(a, b):
+                plan[f] = ('win', src_w / 2.0, None, 1.0, win_y, win_h, base_cw, base_ch, None)
+    return plan, base_cw, base_ch
+
+
+def reframe_clip(video_path: str, start_sec: float, end_sec: float,
+                 output_path: str, pipeline=None, wide_fallback: bool = False,
+                 top_reserved: int = 0, zoom: float = 1.0, push_in: bool = False,
+                 layout: str = 'legacy', analysis=None, zoom_events=None, push=None):
+    """
+    Produce a video-only 1080x1920 clip of round((end-start)*fps) frames.
+
+    layout 'legacy': the picture fills the whole area below top_reserved px
+    (the hook banner area, left black for the banner to cover) with a
+    face-tracked crop. 'A1' / 'A2' / 'B1': see the module docstring
+    (top_reserved is ignored).
+
+    wide_fallback: podcast-style profiles. Shots with two separated faces become
+    a stacked split (left face on top, right face below); shots where no face is
+    found show the whole frame over a blurred fill instead of a blind crop.
+    zoom: punch-in factor (1.0 / 1.12) — clipper alternates it on jump cuts.
+    push_in: add a slow _PUSH_IN zoom across the part.
+    analysis: analyse_clip() result for this part (skips a second detection pass).
+    zoom_events: [(frame, zoom)] punch-in level from that frame on (replaces zoom).
+    push: (start_frame, amount) ease-out push-in reaching 1+amount on the last frame.
+
+    Returns {'faces': [(t, x0, y0, x1, y1)] canvas boxes of detected faces,
+    'crop_w': source width of the unzoomed crop}.
+    """
+    an = analysis or analyse_clip(video_path, start_sec, end_sec, pipeline, wide_fallback)
+    rate, src_w, src_h = an['rate'], an['src_w'], an['src_h']
+    start_f, total_frames, cuts = an['start_f'], an['total_frames'], an['cuts']
+
+    if layout in ('A1', 'A2', 'B1'):
+        plan, base_cw, base_ch = _plan_template(an, layout)
+        top_reserved, content_h = 0, _OUT_H
+    else:
+        plan, base_cw, base_ch, content_h = _plan_legacy(an, top_reserved)
     n_split = sum(1 for p in plan if p and p[0] == 'split')
-    n_wide  = sum(1 for p in plan if p and p[0] == 'wide')
+    n_wide = sum(1 for p in plan if p and p[0] == 'wide')
     if cuts or n_split or n_wide:
         print(f'    {len(cuts)} cut(s); split {n_split} / wide {n_wide} of {total_frames} frames')
 
@@ -446,8 +613,10 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
             and cuts[-1] > head else total_frames)
     src_idx = [min(max(fi, head), tail - 1) for fi in range(total_frames)]
 
+    events = sorted(zoom_events or [])
     canvas = np.zeros((_OUT_H, _OUT_W, 3), dtype=np.uint8)
     panel_h = content_h // 2
+    face_boxes = []
     frame, read = None, 0
     for fi in range(total_frames):
         while read <= src_idx[fi]:
@@ -460,10 +629,17 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
         if frame is None:
             break
 
-        z = zoom * (1.0 + (_PUSH_IN * fi / max(1, total_frames - 1) if push_in else 0.0))
+        if zoom_events is not None:
+            z = next((lvl for f0, lvl in reversed(events) if f0 <= fi), 1.0)
+        else:
+            z = zoom * (1.0 + (_PUSH_IN * fi / max(1, total_frames - 1) if push_in else 0.0))
+        if push and fi >= push[0]:
+            pr = (fi - push[0]) / max(1, total_frames - 1 - push[0])
+            z *= 1.0 + push[1] * (1.0 - (1.0 - pr) ** 3)
         p = plan[src_idx[fi]]
+        rect = None                      # (x1, y1, cw, ch, out_y, out_h) of a single crop
         if p[0] == 'wide':
-            content = _blur_fill(frame, _OUT_W, content_h)
+            canvas[top_reserved:] = _blur_fill(frame, _OUT_W, content_h)
         elif p[0] == 'split':
             panels = []
             for face in (p[1], p[2]):
@@ -477,11 +653,42 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
                                          cw, ch, src_w, src_h, _OUT_W, panel_h))
             content = np.vstack(panels + ([panels[-1][-1:]] * (content_h - 2 * panel_h)))
             content[panel_h - 2:panel_h + 2] = 0     # thin seam between the faces
-        else:
+            canvas[top_reserved:] = content
+        elif p[0] == 'crop':
             cw, ch = base_cw / z, base_ch / z
-            content = _face_crop(frame, p[1], p[2], cw, ch, src_w, src_h, _OUT_W, content_h)
-        canvas[top_reserved:] = content
+            canvas[top_reserved:] = _face_crop(frame, p[1], p[2], cw, ch, src_w, src_h,
+                                               _OUT_W, content_h)
+            rect = (max(0.0, min(p[1] - cw / 2, src_w - cw)),
+                    max(0.0, min(p[2] - ch * 0.42, src_h - ch)), cw, ch, top_reserved, content_h)
+        else:                                        # 'win' (templates)
+            _, cx, ey, zf, wy, wh, cw0, ch0, top = p
+            cw, ch = cw0 / (zf * z), ch0 / (zf * z)
+            if ey is None:
+                x1 = max(0.0, min(cx - cw / 2, src_w - cw))
+                y1 = max(0.0, (src_h - ch) / 2)
+            else:
+                x1, y1 = _eye_rect(cx, ey, cw, ch, src_w, src_h,
+                                   _A1_EYE if layout == 'A1' else _FB_EYE, top)
+            rect = (x1, y1, cw, ch, wy, wh)
+            if layout == 'A1':
+                canvas[:] = _bg_cover(frame)
+                canvas[wy:wy + wh] = _warp(frame, x1, y1, cw, ch, _OUT_W, wh)
+            else:
+                canvas[:] = _warp(frame, x1, y1, cw, ch, _OUT_W, _OUT_H)
         proc.stdin.write(canvas.tobytes())
+
+        # canvas boxes of the faces sampled on this frame (caption placement)
+        faces = an['faces'].get(src_idx[fi]) if rect else None
+        if faces:
+            x1, y1, cw, ch, oy, oh = rect
+            sx, sy = _OUT_W / cw, oh / ch
+            for f in faces:
+                bx0 = (f.get('x0', f['cx'] - f['w'] / 2) * src_w - x1) * sx
+                bx1 = (f.get('x1', f['cx'] + f['w'] / 2) * src_w - x1) * sx
+                by0 = (f.get('top', f['cy'] - f['h'] / 2) * src_h - y1) * sy + oy
+                by1 = (f.get('bot', f['cy'] + f['h'] / 2) * src_h - y1) * sy + oy
+                if bx1 > 0 and bx0 < _OUT_W and by1 > oy and by0 < oy + oh:
+                    face_boxes.append((fi / an['fps'], bx0, by0, bx1, by1))
 
     cap.release()
     try:
@@ -491,3 +698,4 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
     proc.wait()
     if proc.returncode != 0:
         raise RuntimeError(f'reframe_clip ffmpeg failed for {output_path}')
+    return {'faces': face_boxes, 'crop_w': base_cw}

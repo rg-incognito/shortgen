@@ -17,7 +17,9 @@ Heuristic, no OCR (cheap enough for CI):
      passing signs, shirts and other moving clutter.
 
 burned_text(video, start, end) -> [(t0, t1, band)], times in the video's own
-timeline, band 'top' | 'middle' | 'bottom' (thirds of the frame height).
+timeline (absolute: given an episode file and episode seconds, the spans are
+episode seconds, not offsets from `start`), band 'top' | 'middle' | 'bottom'
+(thirds of the frame height). Cost: ~0.15 s per second scanned.
 """
 import json
 import subprocess

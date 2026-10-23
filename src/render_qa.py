@@ -250,9 +250,15 @@ def run(path, ctx=None, write=True):
     cuts = scene_cuts(path, ctx.get('live_rows'))
     qa['cuts'] = cuts
     qa.update(shot_stats(cuts, dur))
+    # punch-ins (clip plan) are edit events too: the shot cap counts them
+    punches = [t for t, *_ in (ctx.get('punches') or [])]
+    if punches:
+        raw = qa['longest_shot']
+        qa.update(shot_stats(sorted(set(cuts) | set(punches)), dur))
+        qa['longest_scene_shot'] = raw
     words = ctx.get('words') or []
     if words:
-        qa['tail_after_last_word'] = round(dur - words[-1]['end'], 2)
+        qa['tail_s'] = round(dur - words[-1]['end'], 2)
         qa['mid_word_joins'] = mid_word_joins(ctx.get('joins') or [], words)
     qa.update(band_checks(path))
 
@@ -285,7 +291,7 @@ def run(path, ctx=None, write=True):
             hits = burned_text(clean, 0.0, min(8.0, dur))
         else:
             hits = burned_text(path, 0.0, min(8.0, dur), ignore_rows=ctx.get('ignore_text_rows', ()))
-        qa['burned_text_0_8'] = [list(h) for h in hits]
+        qa['burned_text'] = [list(h) for h in hits]
     except Exception as exc:
         qa['burned_text_error'] = str(exc)
 
@@ -310,8 +316,10 @@ def evaluate(qa, ctx):
         hard.append(f"overlay_below_safe: overlay pixels down to y {qa['overlay_lowest_y']}")
     if 'lufs' in qa and abs(qa['lufs'] - LUFS_TARGET) > LUFS_TOL:
         hard.append(f"loudness: {qa['lufs']:.1f} LUFS")
-    if qa.get('burned_text_0_8'):
-        hard.append(f"burned_text_0_8: {qa['burned_text_0_8']}")
+    if qa.get('burned_text'):
+        # podcasts carry their own lower thirds / slides: warn only on niche B
+        target = warn if niche == 'B' else hard
+        target.append(f"burned_text_0_8: {qa['burned_text']}")
 
     if qa.get('true_peak', -99) > -1.8:
         warn.append(f"true peak {qa['true_peak']:.1f} dBTP")
@@ -321,7 +329,7 @@ def evaluate(qa, ctx):
         warn.append(f"LRA {qa['lra']:.1f} LU (< 4)")
     if qa.get('longest_shot', 0) > 4.0:
         warn.append(f"longest shot {qa['longest_shot']:.2f} s")
-    tail = qa.get('tail_after_last_word')
+    tail = qa.get('tail_s')
     if tail is not None:
         lo, hi = (0.8, 1.6) if niche == 'A' else ((0.4, 0.7) if niche == 'B' else (0.0, 2.0))
         if not lo <= tail <= hi:
