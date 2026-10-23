@@ -120,7 +120,9 @@ def _fixed_sample_faces(video_path, start_sec, end_sec, src_fps):
     return data
 
 
-def _fixed_reframe_clip(video_path, start_sec, end_sec, output_path, pipeline=None):
+def _fixed_reframe_clip(video_path, start_sec, end_sec, output_path, pipeline=None, **_ignored):
+    # Newer reframe_clip keywords (wide_fallback, top_reserved, zoom, layout, ...) are
+    # accepted and ignored: this Windows fallback keeps the plain centre-crop path.
     cap     = _cv2.VideoCapture(video_path)
     src_fps = cap.get(_cv2.CAP_PROP_FPS) or 25.0
     src_w   = int(cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
@@ -395,7 +397,6 @@ def main():
         short_path = create_story_short(
             str(work_video), story, str(shorts_dir),
             episode_name, pipeline=None, all_words=all_words,
-            yt_title=(yt_meta.get('hook_text') or yt_meta.get('title')) if yt_meta else None,
         )
 
         out_file = OUTPUT_DIR / Path(short_path).name

@@ -68,14 +68,28 @@ BURNED_TEXT_MAX_S  = 1.0    # ...and no more than this much of it anywhere
 BURNED_TEXT_SOFT_ATTEMPT = 3   # from this attempt on, text outside the hook window only warns
 
 
-def _burned_text_problems(story, video_path, attempt=1):
+# A render whose QA still finds burned-in text in 0-8 s: pick another moment this many
+# times (each retry is a full render, so keep it small; the pre-pick scan makes it rare).
+MAX_RESELECT = 1
+
+
+def _burned_text_problems(story, video_path, attempt=1, profile=None):
     """
     Burned-in source text (opening credits, show titles, "previously on") in
     the candidate, via the render side's textguard.burned_text(video, start,
     end) -> [(t0, t1, band)] in episode seconds. Silently skipped when
     textguard is not installed or fails: it is a guard, never a reason to
-    lose the run.
+    lose the run. Niche B (podcast / talk) only warns: those shows' own
+    slides and lower thirds are legitimately flagged.
     """
+    problems = _burned_text_scan(story, video_path, attempt)
+    if problems and render_config(profile or {}).get('niche') == 'B':
+        print(f"      Warning: {'; '.join(problems)} (kept: podcast/talk on-screen graphics)")
+        return []
+    return problems
+
+
+def _burned_text_scan(story, video_path, attempt=1):
     if textguard is None or not video_path:
         return []
     hook_hits, total = [], 0.0
@@ -167,7 +181,7 @@ def _candidate_problems(story, sents, all_words, used, profile, video_path=None,
         problems += _v2_problems(story, profile, rubric_gate(profile) if gate is None else gate)
     # Frame scan last and only for otherwise-usable candidates: it is the slow check.
     if not problems:
-        problems += _burned_text_problems(story, video_path, attempt)
+        problems += _burned_text_problems(story, video_path, attempt, profile)
     return problems
 
 
@@ -189,6 +203,9 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
     min_score = profile.get('min_score', MIN_SCORE)
     gate = rubric_gate(profile)
     framing_cap, originality_cap = layer_caps(profile)
+    # Same render config as the real render, so the length estimate matches it (tail, reaction cut).
+    dur_kwargs = _accepted(edited_duration, render=render_config(profile), video_path=video_path,
+                           wide_fallback=profile.get('wide_fallback', False))
     avoid = list(used_segments)
     best_weak = None
     for attempt in range(1, attempts + 1):
@@ -210,7 +227,7 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
                     story = alt
             for c in story['clips']:
                 c['end_seconds'] = min(c['end_seconds'], src_dur - 0.05)
-            dur = edited_duration(story, all_words, profile['silence_thresh'])
+            dur = edited_duration(story, all_words, profile['silence_thresh'], **dur_kwargs)
             story['_edited_seconds'] = round(dur, 1)
             story['_max_seconds'] = story_max_seconds(story, profile)
             problems += _apply_layers(story, all_words, profile)
@@ -352,13 +369,107 @@ def _story_fields(story, first_comment):
     }
 
 
-def _render_kwargs(render):
-    """render= for create_story_short only when the render side accepts it (merge in either order)."""
+def _accepted(fn, **kwargs):
+    """The kwargs fn's signature accepts (so A and the render side merge in either order)."""
     try:
-        params = inspect.signature(create_story_short).parameters
+        params = inspect.signature(fn).parameters
     except (TypeError, ValueError):
         return {}
-    return {'render': render} if 'render' in params else {}
+    return {k: v for k, v in kwargs.items() if k in params}
+
+
+def _render_kwargs(render):
+    """render= for create_story_short only when the render side accepts it."""
+    return _accepted(create_story_short, render=render)
+
+
+def _qa_burned_text(qa):
+    """True if the render QA hard-failed on burned-in source text (fixable only by another moment)."""
+    return any(str(f).startswith('burned_text') for f in (qa or {}).get('hard_fail') or [])
+
+
+def _print_story(story):
+    total_sec = story.get('_edited_seconds', story.get('_total_seconds', 0))
+    print(f"      Story: [{story['score']}/10] ({story.get('format', 'story_recap')}) {story['storyline_title']}  (~{total_sec:.0f}s total)")
+    print(f"      Summary: {story['storyline_summary']}")
+    print(f"      Opens : \"{story['opening_line']}\" ({story.get('hook_class') or 'no hook_class'})")
+    print(f"      Ends  : \"{story['payoff_line']}\" (payoff at {story.get('payoff_t', 0):.1f}s)")
+    print(f"      Header: {story.get('header', '')}")
+    for key in ('context_line', 'closing_line'):
+        if story.get(key):
+            print(f"      {key}: {story[key]}")
+    for a in story.get('annotations') or []:
+        print(f"      annotation @{a['t']:.1f}s: {a['text']}")
+    if story.get('_rubric') is not None:
+        print(f"      Rubric: {story['_rubric']}/16 {story.get('_rubric_pts')}")
+    print(f"      {len(story['clips'])} clips:")
+    for c in story['clips']:
+        dur = c['end_seconds'] - c['start_seconds']
+        print(f"        [{c['label']}] {c['start_seconds']:.1f}s-{c['end_seconds']:.1f}s ({dur:.0f}s) — {c['description']}")
+
+
+def _select_and_render(tracker, campaign, profile, episode_name, run, segments, all_words, gemini_api_key,
+                       avoid_segments, used_storylines, src_dur, video_path, work_dir, prior_headers=(),
+                       pipeline=None):
+    """
+    Pick the best moment, assign its experiment arm and render it: (story,
+    short_path, qa). When the render QA still finds burned-in source text in
+    the hook window, that moment is set aside and the next one is picked (up
+    to MAX_RESELECT times); other QA hard fails are retried inside the render.
+    Raises WeakMomentSkip (score gate, or every pick had burned-in text).
+    """
+    in_campaign = lambda ep: episode_campaign(ep) == campaign
+    rejected = []   # segments of renders that showed burned-in text
+    for round_ in range(MAX_RESELECT + 1):
+        try:
+            story = _pick_story(segments, all_words, gemini_api_key, list(avoid_segments) + rejected,
+                                used_storylines, campaign, profile, src_dur, video_path=str(video_path),
+                                prior_headers=prior_headers)
+        except WeakMomentSkip as e:
+            e.segments = list(getattr(e, 'segments', None) or []) + rejected
+            raise
+
+        # Experiment arm (blocked randomisation per campaign; nothing runs unless EXPERIMENTS
+        # or EXPERIMENTS_ON switches it on) and the matching render config.
+        render = render_config(profile)
+        try:
+            prior_variants = tracker.get_prior_variants(in_campaign)
+        except Exception as e:
+            print(f"      Prior variants unavailable: {e}")
+            prior_variants = []
+        variant, story['_experiments'] = assign_variant(campaign, render, prior_variants,
+                                                        seed=f"{episode_name}|{run}",
+                                                        enabled=os.environ.get('EXPERIMENTS_ON'))
+        story['variant'] = variant
+        apply_variant(story, variant)
+        render = dict(render, template=variant['template'])
+        render_kwargs = _render_kwargs(render)
+        if render_kwargs and variant['template'] == 'A1':
+            story['hook_emoji'] = ''   # the A1 header carries no emoji
+        print(f"      Variant: {variant} experiments={story['_experiments'] or 'none'}"
+              f"{'' if render_kwargs else ' (renderer has no render= yet: current look)'}")
+        _print_story(story)
+
+        shorts_dir = Path(work_dir) / ('shorts' if not round_ else f'shorts_{round_ + 1}')
+        shorts_dir.mkdir()
+        print("[4/5] Creating story compilation...")
+        short_path = create_story_short(str(video_path), story, str(shorts_dir),
+                                        episode_name, pipeline=pipeline,
+                                        all_words=all_words,
+                                        silence_thresh=profile['silence_thresh'],
+                                        wide_fallback=profile.get('wide_fallback', False),
+                                        **render_kwargs)
+        qa = _read_qa(short_path)
+        if qa:
+            print(f"      Render QA: {_qa_fields(qa)}")
+        if not _qa_burned_text(qa):
+            return story, short_path, qa
+        rejected += [(c['start_seconds'], c['end_seconds']) for c in story['clips']]
+        print(f"      Render QA found burned-in text in '{story['storyline_title']}' — "
+              f"picking another moment ({round_ + 1}/{MAX_RESELECT})")
+    skip = WeakMomentSkip(f"every pick ({MAX_RESELECT + 1}) showed burned-in text in the render QA")
+    skip.segments, skip.score, skip.kind = rejected, story['score'], 'render QA burned text'
+    raise skip
 
 
 def _record_skip(tracker, campaign, episode_name, run, skip):
@@ -371,7 +482,7 @@ def _record_skip(tracker, campaign, episode_name, run, skip):
     print(f"\n{'=' * 70}\nSKIPPED — NOTHING UPLOADED for {episode_name}: {skip}\n{'=' * 70}")
     tracker.log_clips(episode_name, run, [
         {'title': f"{SKIP_PREFIX}p{i + 1}", 'start_seconds': s, 'end_seconds': e,
-         'score': skip.score, 'reason': f"score gate: {skip}"}
+         'score': skip.score, 'reason': f"{getattr(skip, 'kind', 'score gate')}: {skip}"}
         for i, (s, e) in enumerate(skip.segments or [(0.0, 0.0)])
     ])
     skips = tracker.consecutive_skips(lambda ep: episode_campaign(ep) == campaign)
@@ -506,68 +617,19 @@ def main():
         if textguard is None:
             print("      Burned-text check unavailable (textguard not installed)")
         try:
-            story = _pick_story(segments, all_words, gemini_api_key, avoid_segments, used_storylines,
-                                campaign, profile, src_dur, video_path=str(video_path),
-                                prior_headers=prior_headers)
+            story, short_path, qa = _select_and_render(
+                tracker, campaign, profile, episode_name, current_run, segments, all_words, gemini_api_key,
+                avoid_segments, used_storylines, src_dur, video_path, work_dir, prior_headers,
+                diarization_pipeline)
         except WeakMomentSkip as e:
             _record_skip(tracker, campaign, episode_name, current_run, e)
             return
-
-        # Experiment arm (blocked randomisation per campaign; nothing runs unless EXPERIMENTS
-        # or EXPERIMENTS_ON switches it on) and the matching render config.
-        render = render_config(profile)
-        try:
-            prior_variants = tracker.get_prior_variants(in_campaign)
-        except Exception as e:
-            print(f"      Prior variants unavailable: {e}")
-            prior_variants = []
-        variant, story['_experiments'] = assign_variant(campaign, render, prior_variants,
-                                                        seed=f"{episode_name}|{current_run}",
-                                                        enabled=os.environ.get('EXPERIMENTS_ON'))
-        story['variant'] = variant
-        apply_variant(story, variant)
-        render = dict(render, template=variant['template'])
-        render_kwargs = _render_kwargs(render)
-        if render_kwargs and variant['template'] == 'A1':
-            story['hook_emoji'] = ''   # the A1 header carries no emoji
-        print(f"      Variant: {variant} experiments={story['_experiments'] or 'none'}"
-              f"{'' if render_kwargs else ' (renderer has no render= yet: current look)'}")
-        total_sec = story.get('_edited_seconds', story.get('_total_seconds', 0))
-        print(f"      Story: [{story['score']}/10] ({story.get('format', 'story_recap')}) {story['storyline_title']}  (~{total_sec:.0f}s total)")
-        print(f"      Summary: {story['storyline_summary']}")
-        print(f"      Opens : \"{story['opening_line']}\" ({story.get('hook_class') or 'no hook_class'})")
-        print(f"      Ends  : \"{story['payoff_line']}\" (payoff at {story.get('payoff_t', 0):.1f}s)")
-        print(f"      Header: {story.get('header', '')}")
-        for key in ('context_line', 'closing_line'):
-            if story.get(key):
-                print(f"      {key}: {story[key]}")
-        for a in story.get('annotations') or []:
-            print(f"      annotation @{a['t']:.1f}s: {a['text']}")
-        if story.get('_rubric') is not None:
-            print(f"      Rubric: {story['_rubric']}/16 {story.get('_rubric_pts')}")
-        print(f"      {len(story['clips'])} clips:")
-        for c in story['clips']:
-            dur = c['end_seconds'] - c['start_seconds']
-            print(f"        [{c['label']}] {c['start_seconds']:.1f}s-{c['end_seconds']:.1f}s ({dur:.0f}s) — {c['description']}")
 
         print("      Generating YouTube metadata...")
         prior_titles = tracker.get_prior_titles()
         yt_meta = _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior_titles)
         if yt_meta:
             print(f"      YT title: {yt_meta.get('title', '')}")
-
-        shorts_dir = work_dir / 'shorts'
-        shorts_dir.mkdir()
-        print("[4/5] Creating story compilation...")
-        short_path = create_story_short(str(video_path), story, str(shorts_dir),
-                                        episode_name, pipeline=diarization_pipeline,
-                                        all_words=all_words,
-                                        silence_thresh=profile['silence_thresh'],
-                                        wide_fallback=profile.get('wide_fallback', False),
-                                        **render_kwargs)
-        qa = _read_qa(short_path)
-        if qa:
-            print(f"      Render QA: {_qa_fields(qa)}")
 
         max_sec = story.get('_max_seconds') or profile.get('max_seconds')
         if profile.get('min_seconds') or max_sec:

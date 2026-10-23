@@ -51,6 +51,9 @@ def _render(niche, **overrides):
 # Length by niche: 16-25 s had the best viral rate (87%) and our own retention
 # falls past 35 s. B allows up to LONG_ARC_MAX only for one escalating story
 # whose payoff sits in the last 30%; nothing unlicensed ever goes over 60 s.
+_FRIENDS_CAST = ['Ross', 'Rachel', 'Monica', 'Chandler', 'Joey', 'Phoebe', 'Gunther', 'Janice',
+                 'Emily', 'Carol', 'Susan', 'Mike', 'Richard', 'Ursula', 'Frank']
+
 NICHE_LENGTH = {'A': {'target': (14, 25), 'max': 32}, 'B': {'target': (16, 30), 'max': 35}}
 LONG_ARC_MAX = 60.0
 LONG_ARC_PAYOFF_POS = 0.70
@@ -69,11 +72,11 @@ CAMPAIGNS = {
         'title_names':     ['Friends', 'Jennifer Aniston', 'Courteney Cox', 'Lisa Kudrow',
                             'Matt LeBlanc', 'Matthew Perry', 'David Schwimmer'],
         # Characters: not counted as content words when checking headers and overlays for echoes.
-        'cast_names':      ['Ross', 'Rachel', 'Monica', 'Chandler', 'Joey', 'Phoebe', 'Gunther', 'Janice',
-                            'Emily', 'Carol', 'Susan', 'Mike', 'Richard', 'Ursula', 'Frank'],
+        'cast_names':      _FRIENDS_CAST,
         'genre':           'sitcom',
         # Our own channel: the originality layer and the handle are ours to add.
-        'render':          _render('A', overlays_allowed=True, handle='@theonewhereclips'),
+        # names: caption words that get the highlight colour.
+        'render':          _render('A', overlays_allowed=True, handle='@theonewhereclips', names=_FRIENDS_CAST),
         # Opening credits are burned over the first scene after the theme: a cheap prior
         # next to the burned-text detector (episode seconds 0-avoid_first_s are avoided).
         'avoid_first_s':   240,
@@ -161,7 +164,7 @@ CAMPAIGNS = {
         'title_names':     ['Mark Manson'],
         'genre':           'podcast',
         # Brief: full subtitles, Mark on screen in 5 s. Full-bleed, no added text.
-        'render':          _render('B', caption_preset='full_subs'),
+        'render':          _render('B', caption_preset='full_subs', names=['Mark', 'Manson']),
         # Big life questions are this show's topic, not a vague tease.
         'vague_exempt':    ['life'],
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/6bdc8e4b-3ebf-44f1-aedb-067589ca9c89',
@@ -206,7 +209,7 @@ CAMPAIGNS = {
         'publish_slots_et': ['19:30'],
         'title_names':     ['Zach Justice', 'Love & Justice', 'Love and Justice', 'HardScope'],
         'genre':           'reality',
-        'render':          _render('A'),
+        'render':          _render('A', names=['Zach']),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/3b59058d-81d1-489b-bf54-97375caa10ad',
         'required_caption': ['#LOVEANDJUSTICE', '@HardScopeTV'],
         'caption_footer':   'Full episode of Love & Justice on @HardScopeTV\n\n#LOVEANDJUSTICE #ZachJustice #HardScope',
@@ -243,7 +246,7 @@ CAMPAIGNS = {
         'publish_slots_et': ['21:00'],
         'title_names':     ['Unpacked', 'MatCrackz', 'Steve Aoki', 'YourRAGE', 'HardScope'],
         'genre':           'talk',
-        'render':          _render('B'),
+        'render':          _render('B', names=['MatCrackz', 'Aoki', 'YourRAGE']),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/c85645f1-b75f-49e2-91d5-988cf9b3fadb',
         # Each episode is its own Whop campaign; submitting to the wrong one is a ban.
         'whop_campaigns': {
@@ -289,7 +292,7 @@ CAMPAIGNS = {
         'title_names':     ['IShowSpeed', 'Jay Cutler', 'Phil Heath'],
         'genre':           'talk',
         # Brief: must look organic: no @, no brand, no added text beyond captions.
-        'render':          _render('B'),
+        'render':          _render('B', names=['IShowSpeed', 'Speed', 'Cutler', 'Heath']),
         # No required caption text: the brief wants it to look organic, not branded.
         'banned_patterns': [
             r'young\s?la', r'@\w+', r'\bsponsor', r'\b#?ad\b', r'\bshop\b', r'\blink\b', r'\bdiscount\b',
