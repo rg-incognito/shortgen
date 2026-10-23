@@ -1,4 +1,5 @@
 import datetime
+import json
 import random
 import re
 from googleapiclient.discovery import build
@@ -23,6 +24,29 @@ _PUBLISH_BUFFER_MIN = (10, 15)
 _HASH_COL = 'N'
 # Clip-log titles of a run the score gate skipped (its segments count as used).
 SKIP_PREFIX = 'SKIPPED_'
+# Columns O+ of PostingTracker: packaging, experiment arm and render QA per upload
+# (written by main.py), then the 48 h / 7 d stats (written by fetch_analytics.py --snapshot).
+_EXTRA_FIRST = 14   # column O
+EXTRA_HEADERS = [
+    'header', 'hook_class', 'rubric', 'variant', 'context_line', 'closing_line', 'annotations',
+    'payoff_t', 'first_comment', 'first_comment_status',
+    'qa_lufs', 'qa_true_peak', 'qa_lra', 'qa_longest_shot', 'qa_tail_s', 'qa_burned_text', 'qa_fail', 'qa_json',
+    'views_48h', 'engaged_ratio_48h', 'avp_48h', 'avd_48h', 't1_share_48h', 'stats_48h_at',
+    'views_7d', 'engaged_ratio_7d', 'avp_7d', 'stats_7d_at',
+]
+
+
+def col_letter(i):
+    """0-based column index -> A1 letters (0 -> A, 14 -> O, 27 -> AB)."""
+    s = ''
+    i += 1
+    while i:
+        i, r = divmod(i - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+_LAST_COL = col_letter(_EXTRA_FIRST + len(EXTRA_HEADERS) - 1)
 
 
 def episode_key(name):
@@ -169,8 +193,83 @@ class SheetTracker:
     def _posting_rows(self):
         self._ensure_posting_sheet()
         return self._svc.spreadsheets().values().get(
-            spreadsheetId=self._sid, range=f'{_POSTING_SHEET}!A:N',
+            spreadsheetId=self._sid, range=f'{_POSTING_SHEET}!A:{_LAST_COL}',
         ).execute(num_retries=5).get('values', [])[1:]
+
+    @staticmethod
+    def extra(row, name):
+        """Value of an O+ column (EXTRA_HEADERS name) in a PostingTracker row, '' if absent."""
+        i = _EXTRA_FIRST + EXTRA_HEADERS.index(name)
+        return row[i] if len(row) > i else ''
+
+    def _ensure_posting_columns(self):
+        """
+        Widen PostingTracker to column _LAST_COL if needed (once per tracker):
+        a new sheet has 26 columns (A..Z) and writes past the grid are rejected.
+        """
+        if getattr(self, '_columns_ok', False):
+            return
+        need = _EXTRA_FIRST + len(EXTRA_HEADERS)
+        meta = self._svc.spreadsheets().get(
+            spreadsheetId=self._sid, fields='sheets.properties',
+        ).execute(num_retries=5)
+        for s in meta.get('sheets', []):
+            props = s.get('properties', {})
+            if props.get('title') != _POSTING_SHEET:
+                continue
+            have = props.get('gridProperties', {}).get('columnCount', 26)
+            if have < need:
+                self._svc.spreadsheets().batchUpdate(
+                    spreadsheetId=self._sid,
+                    body={'requests': [{'appendDimension': {
+                        'sheetId': props['sheetId'], 'dimension': 'COLUMNS', 'length': need - have}}]},
+                ).execute(num_retries=5)
+                print(f"      PostingTracker widened from {have} to {need} columns")
+        self._columns_ok = True
+
+    def set_posting_fields(self, row_num, fields):
+        """Write {EXTRA_HEADERS name: value} into PostingTracker row row_num (1-based), adding headers once."""
+        self._ensure_posting_columns()
+        head = self._svc.spreadsheets().values().get(
+            spreadsheetId=self._sid, range=f'{_POSTING_SHEET}!{col_letter(_EXTRA_FIRST)}1:{_LAST_COL}1',
+        ).execute(num_retries=5).get('values', [[]])
+        data = []
+        if (head[0] if head else []) != EXTRA_HEADERS:
+            data.append({'range': f'{_POSTING_SHEET}!{col_letter(_EXTRA_FIRST)}1', 'values': [EXTRA_HEADERS]})
+        for name, value in fields.items():
+            col = col_letter(_EXTRA_FIRST + EXTRA_HEADERS.index(name))
+            data.append({'range': f'{_POSTING_SHEET}!{col}{row_num}', 'values': [['' if value is None else str(value)]]})
+        if data:
+            self._svc.spreadsheets().values().batchUpdate(
+                spreadsheetId=self._sid, body={'valueInputOption': 'RAW', 'data': data},
+            ).execute(num_retries=5)
+
+    def log_story_fields(self, episode_name, run_number, storyline_title, fields):
+        """Packaging, variant and QA fields for the PostingTracker row of this run (see EXTRA_HEADERS)."""
+        rows = self._posting_rows()
+        for i, row in enumerate(rows):
+            if (len(row) >= 3 and row[0] == episode_name and row[1] == str(run_number)
+                    and row[2] == storyline_title):
+                self.set_posting_fields(i + 2, fields)   # +1 header row, +1 for 1-based rows
+                return True
+        return False
+
+    def get_prior_variants(self, belongs):
+        """Logged variants (dicts with an 'exp' list) of episodes where belongs(episode), oldest first."""
+        out = []
+        for r in self._posting_rows():
+            raw = self.extra(r, 'variant')
+            if r and raw and belongs(r[0]):
+                try:
+                    out.append(json.loads(raw))
+                except ValueError:
+                    pass
+        return out
+
+    def get_prior_headers(self, belongs):
+        """On-screen headers of earlier uploads of episodes where belongs(episode), oldest first."""
+        return [self.extra(r, 'header') for r in self._posting_rows()
+                if r and belongs(r[0]) and self.extra(r, 'header')]
 
     def get_prior_titles(self):
         """(episode_name, title) for every YouTube title logged so far, oldest first."""

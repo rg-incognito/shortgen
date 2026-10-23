@@ -120,7 +120,9 @@ def _fixed_sample_faces(video_path, start_sec, end_sec, src_fps):
     return data
 
 
-def _fixed_reframe_clip(video_path, start_sec, end_sec, output_path, pipeline=None):
+def _fixed_reframe_clip(video_path, start_sec, end_sec, output_path, pipeline=None, **_ignored):
+    # Newer reframe_clip keywords (wide_fallback, top_reserved, zoom, layout, ...) are
+    # accepted and ignored: this Windows fallback keeps the plain centre-crop path.
     cap     = _cv2.VideoCapture(video_path)
     src_fps = cap.get(_cv2.CAP_PROP_FPS) or 25.0
     src_w   = int(cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
@@ -202,9 +204,22 @@ def _fixed_reframe_clip(video_path, start_sec, end_sec, output_path, pipeline=No
         raise RuntimeError(f'reframe_clip ffmpeg failed for {output_path}')
 
 
-# Patch the real module's functions so clipper's lazy import gets our versions
-_rm._sample_faces = _fixed_sample_faces
-_rm.reframe_clip  = _fixed_reframe_clip
+# Patch the real module's functions so clipper's lazy import gets our versions.
+# Only where the real signatures still match these fallbacks: the template layouts
+# (A1/A2/B1, layout= / analysis=) go to the real reframe_clip.
+import inspect as _inspect
+if 'start_sec' in _inspect.signature(_rm._sample_faces).parameters:
+    _rm._sample_faces = _fixed_sample_faces
+_orig_reframe_clip = _rm.reframe_clip
+
+
+def _reframe_dispatch(*args, **kw):
+    if kw.get('layout', 'legacy') != 'legacy' or kw.get('analysis') is not None:
+        return _orig_reframe_clip(*args, **kw)
+    return _fixed_reframe_clip(*args, **kw)
+
+
+_rm.reframe_clip = _reframe_dispatch
 
 # ── Windows Fix 3: ASS subtitle path in captioner ────────────────────────────
 # ffmpeg's ass= filter uses ':' as option separator, so 'C:/path/file.ass'
@@ -261,7 +276,11 @@ def _fixed_burn_captions(video_path, output_path, all_words, story_clips, yt_tit
         except OSError:
             pass
 
-_captioner_mod.burn_captions = _fixed_burn_captions
+# The current captioner (render=, overlays=) writes captions.ass into its work dir and
+# runs ffmpeg there (cwd=) with a relative ass= path, so it needs no Windows fix; only
+# the legacy captioner is patched.
+if 'render' not in _inspect.signature(_captioner_mod.burn_captions).parameters:
+    _captioner_mod.burn_captions = _fixed_burn_captions
 
 # ── Directories ───────────────────────────────────────────────────────────────
 INPUT_DIR  = Path(__file__).parent / 'input'
@@ -395,7 +414,6 @@ def main():
         short_path = create_story_short(
             str(work_video), story, str(shorts_dir),
             episode_name, pipeline=None, all_words=all_words,
-            yt_title=(yt_meta.get('hook_text') or yt_meta.get('title')) if yt_meta else None,
         )
 
         out_file = OUTPUT_DIR / Path(short_path).name

@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import json
 import os
 import shutil
@@ -15,13 +16,21 @@ from drive_client import (download_video, upload_shorts, pick_video, pick_from_f
                           load_transcript_cache, save_transcript_cache)
 from transcriber import transcribe_video
 from analyzer import (analyze_candidates, generate_yt_metadata, build_sentences, build_candidate,
-                      hook_problems, overlap_problems, rank_score)
+                      hook_problems, overlap_problems, rank_score, later_start, rubric_points, story_offset,
+                      HOOK_CLASSES, PAYOFF_MAX_TAIL, GENRES)
 from clipper import create_story_short, edited_duration
 from sheet_tracker import SheetTracker, SKIP_PREFIX
 from campaigns import (get_campaign, find_banned, find_transcript_banned, enforce_caption,
                        next_publish_time, publish_plan, window_publish_time, episode_campaign, SLOT_GUARD_MIN,
-                       spoiler_hits, tidy_title, title_problems, clean_hashtags)
+                       tidy_title, title_problems, clean_hashtags, header_problems, overlay_checks,
+                       render_config, length_plan, story_max_seconds, layer_caps, rubric_gate,
+                       assign_variant, apply_variant)
 from footage import download_from_release, sponsor_segments
+
+try:   # render side (Coder B); absent until that branch is merged
+    import textguard
+except Exception:
+    textguard = None
 
 VIDEOS_FOLDER_ID  = os.environ.get('VIDEOS_FOLDER_ID',  '1bIFaNpfBy1Bp9R14T22EV-hMsYYrLeTS')
 SHORTS_FOLDER_ID  = os.environ.get('SHORTS_FOLDER_ID',  '1kzFXWZQu8QQVtZKeAVvSgHcLaRFfK6tg')
@@ -35,6 +44,12 @@ MAX_CONSECUTIVE_SKIPS = 3
 
 class WeakMomentSkip(Exception):
     """The best moment that passed every check still scored under MIN_SCORE."""
+    kind = 'score gate'
+
+
+class NoCandidateSkip(WeakMomentSkip, RuntimeError):
+    """No candidate passed the campaign rules (recorded like a skip; still a RuntimeError)."""
+    kind = 'no candidate passed'
 
 
 def _sha1(path):
@@ -54,59 +69,191 @@ def _probe_duration(path):
     return float(out.stdout.strip()) if out.stdout.strip() else float('inf')
 
 
-def _candidate_problems(story, sents, all_words, used, profile):
+BURNED_TEXT_HOOK_S = 8.0    # no credits or source text while the viewer decides to stay
+BURNED_TEXT_MAX_S  = 1.0    # ...and no more than this much of it anywhere
+BURNED_TEXT_SOFT_ATTEMPT = 3   # from this attempt on, text outside the hook window only warns
+
+
+# A render whose QA still finds burned-in text in 0-8 s: pick another moment this many
+# times (each retry is a full render, so keep it small; the pre-pick scan makes it rare).
+MAX_RESELECT = 1
+
+
+def _burned_text_problems(story, video_path, attempt=1, profile=None):
+    """
+    Burned-in source text (opening credits, show titles, "previously on") in
+    the candidate, via the render side's textguard.burned_text(video, start,
+    end) -> [(t0, t1, band)] in episode seconds. Silently skipped when
+    textguard is not installed or fails: it is a guard, never a reason to
+    lose the run. Niche B (podcast / talk) only warns: those shows' own
+    slides and lower thirds are legitimately flagged.
+    """
+    problems = _burned_text_scan(story, video_path, attempt)
+    if problems and render_config(profile or {}).get('niche') == 'B':
+        print(f"      Warning: {'; '.join(problems)} (kept: podcast/talk on-screen graphics)")
+        return []
+    return problems
+
+
+def _burned_text_scan(story, video_path, attempt=1):
+    if textguard is None or not video_path:
+        return []
+    hook_hits, total = [], 0.0
+    for c in story['clips']:
+        try:
+            spans = textguard.burned_text(video_path, c['start_seconds'], c['end_seconds']) or []
+        except Exception as e:
+            print(f"      Burned-text check skipped: {e}")
+            return []
+        for sp in spans:
+            t0, t1 = (sp.get('t0'), sp.get('t1')) if isinstance(sp, dict) else (sp[0], sp[1])
+            t0, t1 = max(float(t0), c['start_seconds']), min(float(t1), c['end_seconds'])
+            if t1 <= t0:
+                continue
+            total += t1 - t0
+            off = story_offset(story['clips'], t0)
+            if off is not None and off < BURNED_TEXT_HOOK_S:
+                hook_hits.append(off)
+    if hook_hits:
+        return [f"burned-in text {min(hook_hits):.1f}s into the clip (first {BURNED_TEXT_HOOK_S:.0f}s)"]
+    if total > BURNED_TEXT_MAX_S:
+        if attempt < BURNED_TEXT_SOFT_ATTEMPT:
+            return [f"burned-in text on screen for {total:.1f}s"]
+        print(f"      Warning: burned-in text on screen for {total:.1f}s (allowed on attempt {attempt})")
+    return []
+
+
+def _apply_layers(story, all_words, profile):
+    """
+    Validate the originality layer: drop any overlay line that echoes the
+    dialogue, uses a banned brief term or a vague word, keep annotations for
+    reality/drama only. Returns hard problems (a header that echoes the
+    dialogue). Sets story['_layers'] to the lines that survived.
+    """
+    bad = overlay_checks(story, all_words, profile)
+    problems = []
+    if 'header' in bad:
+        why = bad.pop('header')
+        if render_config(profile).get('header'):   # only matters when it is on screen
+            problems.append(f"header echoes the dialogue ({why})")
+    for field, why in bad.items():
+        print(f"      ~ {story.get('storyline_title', '?')}: dropped {field} ({why})")
+    for field in ('context_line', 'closing_line'):
+        if field in bad:
+            story[field] = None
+    genre = profile.get('genre') or 'sitcom'
+    story['annotations'] = [a for a in story.get('annotations') or []
+                            if f"annotation@{a['t']:.1f}" not in bad and genre in ('reality', 'drama')]
+    story['_layers'] = ([k for k in ('context_line', 'closing_line') if story.get(k)]
+                        + (['annotations'] if story['annotations'] else []))
+    return problems
+
+
+def _v2_problems(story, profile, gate):
+    """Rules for candidates in the v2 answer shape (hook_class, payoff_sentence, rubric, layers)."""
+    problems = []
+    hc = story.get('hook_class')
+    if hc not in HOOK_CLASSES:
+        problems.append(f"unknown hook_class {hc!r}")
+    elif hc == 'SL':
+        problems.append("opens on slow setup (hook_class SL)")
+    if story.get('_payoff_tail', 0) > PAYOFF_MAX_TAIL:
+        problems.append(f"ends {story['_payoff_tail']:.1f}s after the payoff (max {PAYOFF_MAX_TAIL:g}s)")
+    if render_config(profile).get('overlays_allowed') and not story.get('_layers'):
+        problems.append("no originality layer survived (closing/context line or annotations)")
+    if story.get('_rubric') is not None and story['_rubric'] < gate:
+        problems.append(f"rubric {story['_rubric']}/16 < {gate}")
+    return problems
+
+
+def _candidate_problems(story, sents, all_words, used, profile, video_path=None, attempt=1,
+                        prior_headers=(), gate=None):
     """Every hard rule a candidate breaks (empty list = usable)."""
-    lo, hi = profile.get('min_seconds'), profile.get('max_seconds')
+    lo = profile.get('min_seconds')
+    hi = story.get('_max_seconds') or profile.get('max_seconds')
     dur = story['_edited_seconds']
     problems = []
     if lo and dur < lo:
         problems.append(f"too short after trimming ({dur:.1f}s < {lo}s)")
     if hi and dur > hi:
-        problems.append(f"too long after trimming ({dur:.1f}s > {hi}s)")
+        problems.append(f"too long after trimming ({dur:.1f}s > {hi:g}s)")
     problems += hook_problems(story, sents, all_words)
     # Code-side dedupe: the LLM is told the used segments but not trusted with them.
     problems += overlap_problems(story['clips'], used)
-    banned = find_banned(story.get('hook_text', ''), profile)
-    if banned:
-        problems.append(f"hook uses banned words {banned}")
-    spoils = spoiler_hits(story.get('hook_text', ''), story['payoff_line'], profile)
-    if len(spoils) >= 2:
-        problems.append(f"hook_text gives away the payoff {spoils}")
+    # The header is read in frame 0: no vague tease, no payoff word, no banned term, no reused opener.
+    # A campaign that shows no header only keeps the banned-term check (the text still feeds titles/logs).
+    if render_config(profile).get('header'):
+        problems += header_problems(story, profile, prior_headers)
+    else:
+        banned = find_banned(story.get('header') or '', profile)
+        if banned:
+            problems.append(f"header uses banned words {banned}")
     ad_hits = find_transcript_banned(story, all_words, profile)
     if ad_hits:
         problems.append(f"clip audio looks like an ad read {ad_hits}")
+    if story.get('_v2'):
+        problems += _v2_problems(story, profile, rubric_gate(profile) if gate is None else gate)
+    # Frame scan last and only for otherwise-usable candidates: it is the slow check.
+    if not problems:
+        problems += _burned_text_problems(story, video_path, attempt, profile)
     return problems
 
 
 def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storylines,
-                campaign, profile, src_dur, attempts=3):
+                campaign, profile, src_dur, attempts=3, video_path=None, prior_headers=()):
     """
     Ask Gemini for 3-5 candidate moments as sentence ranges, cut them on whole
     sentences, rank them in code (0.4 hook + 0.3 payoff + 0.2 clarity + 0.1
-    length fit) and return the best one that passes every campaign rule.
-    Rejected candidates join the avoid-list for the next attempt. Raises
-    WeakMomentSkip if the best passing moment scores under MIN_SCORE.
+    length fit, blended with the 16-point rubric) and return the best one
+    that passes every campaign rule. A setup opener first tries a later start
+    on the next question or conflict line. Rejected candidates join the
+    avoid-list for the next attempt. Raises WeakMomentSkip if the best passing
+    moment scores under MIN_SCORE.
     """
     sents = build_sentences(all_words, segments)
-    limits = (profile.get('min_seconds') or 12, profile.get('max_seconds') or 40)
+    lo, hi, target = length_plan(profile)
+    limits = (lo, hi)
+    genre = profile.get('genre') or GENRES.get(campaign, 'sitcom')
     min_score = profile.get('min_score', MIN_SCORE)
+    gate = rubric_gate(profile)
+    framing_cap, originality_cap = layer_caps(profile)
+    # Same render config as the real render, so the length estimate matches it (tail, reaction cut).
+    dur_kwargs = _accepted(edited_duration, render=render_config(profile), video_path=video_path,
+                           wide_fallback=profile.get('wide_fallback', False))
     avoid = list(used_segments)
     best_weak = None
     for attempt in range(1, attempts + 1):
         raws = analyze_candidates(sents, gemini_api_key, used_segments=avoid,
-                                  used_storylines=used_storylines, campaign=campaign, limits=limits)
+                                  used_storylines=used_storylines, campaign=campaign, limits=limits,
+                                  target=target, genre=genre, recent_headers=list(prior_headers))
         ranked, used = [], list(avoid)   # candidates of one answer may overlap each other
         for raw in raws:
             story, problems = build_candidate(raw, sents, all_words)
             if not story:
                 print(f"      - unusable candidate {raw.get('storyline_title', '?')}: {'; '.join(problems)}")
                 continue
+            if not render_config(profile).get('header'):
+                problems = [p for p in problems if p != 'missing header']
+            if story['_v2'] and (story.get('hook_class') == 'SL' or hook_problems(story, sents, all_words)):
+                alt = later_start(story, sents, all_words)
+                if alt and not hook_problems(alt, sents, all_words):
+                    a, k = alt['_later_start']
+                    print(f"      ~ {story['storyline_title']}: later start S{a} -> S{k} "
+                          f"\"{alt['opening_line'][:50]}\" ({alt['hook_class']})")
+                    story = alt
             for c in story['clips']:
                 c['end_seconds'] = min(c['end_seconds'], src_dur - 0.05)
-            dur = edited_duration(story, all_words, profile['silence_thresh'])
+            dur = edited_duration(story, all_words, profile['silence_thresh'], **dur_kwargs)
             story['_edited_seconds'] = round(dur, 1)
-            story['score'] = rank_score(story, dur)
-            problems += _candidate_problems(story, sents, all_words, used, profile)
+            story['_max_seconds'] = story_max_seconds(story, profile)
+            problems += _apply_layers(story, all_words, profile)
+            if story['_v2']:
+                o_cap = 1 if story['_layers'] == ['annotations'] else originality_cap
+                story['_rubric'], story['_rubric_pts'] = rubric_points(
+                    story, dur, framing_cap, min(o_cap, originality_cap), long_arc=story['_max_seconds'] > hi)
+            story['score'] = rank_score(story, dur, target)
+            problems += _candidate_problems(story, sents, all_words, used, profile, video_path=video_path,
+                                            attempt=attempt, prior_headers=prior_headers, gate=gate)
             ranked.append((story, problems))
             avoid += [seg for seg in ((c['start_seconds'], c['end_seconds']) for c in story['clips'])
                       if seg not in avoid]
@@ -115,8 +262,11 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
         print(f"      Attempt {attempt}: {len(ranked)} candidate(s)")
         for story, problems in ranked:
             verdict = 'ok' if not problems else 'rejected: ' + '; '.join(problems)
-            print(f"        [{story['score']:.1f}] {story['storyline_title']} "
-                  f"({story['_edited_seconds']:.0f}s) \"{story['opening_line'][:60]}\" -> {verdict}")
+            tag = (f" {story.get('hook_class') or '?'} rubric {story['_rubric']}/16"
+                   if story.get('_rubric') is not None else '')
+            print(f"        [{story['score']:.1f}]{tag} {story['storyline_title']} "
+                  f"({story['_edited_seconds']:.0f}s) \"{story['opening_line'][:60]}\" "
+                  f"[{story.get('header', '')}] -> {verdict}")
 
         passing = [story for story, problems in ranked if not problems]
         if passing and passing[0]['score'] >= min_score:
@@ -131,7 +281,12 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
         err.segments = [seg for seg in avoid if seg not in used_segments]
         err.score = best_weak['score']
         raise err
-    raise RuntimeError(f"No moment met the {campaign} campaign rules after {attempts} attempts")
+    # Nothing passed: record it like a score-gate skip (offered segments marked used, the
+    # 3-in-a-row alarm still fires) so the next run does not repeat the same work.
+    err = NoCandidateSkip(f"No moment met the {campaign} campaign rules after {attempts} attempts")
+    err.segments = [seg for seg in avoid if seg not in used_segments]
+    err.score = 0
+    raise err
 
 
 def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior_titles=(), attempts=4):
@@ -143,7 +298,7 @@ def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior
     """
     all_titles = [t for _, t in prior_titles]
     campaign_titles = [t for ep, t in prior_titles if episode_campaign(ep) == campaign]
-    fallback = None
+    fallback = vague_fallback = None
     for attempt in range(1, attempts + 1):
         yt_meta = generate_yt_metadata(story, episode_name, gemini_api_key, campaign=campaign,
                                        title_names=profile.get('title_names'),
@@ -153,7 +308,7 @@ def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior
         yt_meta['title'] = tidy_title(str(yt_meta.get('title', '')))
         text = ' '.join(str(yt_meta.get(k, '')) for k in ('title', 'description', 'tags', 'pinned_comment'))
         hard, soft = title_problems(yt_meta['title'], profile, all_titles, story.get('payoff_line', ''),
-                                    campaign_titles)
+                                    campaign_titles, vague_hard=True)
         banned = find_banned(text, profile)
         if banned:
             hard.append(f"banned words {banned}")
@@ -162,12 +317,193 @@ def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior
         print(f"      Metadata attempt {attempt} rejected ({yt_meta['title']!r}): {'; '.join(hard + soft)}")
         if not hard and not fallback:
             fallback = yt_meta
+        # Metadata runs after the render: a title whose only hard issue is a vague word
+        # is a last resort rather than a reason to throw the render away.
+        if hard and all(h.startswith('vague words') for h in hard) and not vague_fallback:
+            vague_fallback = yt_meta
     if fallback:
         print(f"      Using {fallback['title']!r} despite soft title issues")
         return clean_hashtags(enforce_caption(fallback, profile), profile)
+    if vague_fallback:
+        print(f"::warning title=Vague title::{episode_name}: using {vague_fallback['title']!r} "
+              f"(every attempt used a vague word)")
+        return clean_hashtags(enforce_caption(vague_fallback, profile), profile)
     if not yt_meta:
         return None
     raise RuntimeError(f"Could not generate {campaign} metadata that passes the title rules")
+
+
+# Render QA (<out>.qa.json from the render side) -> tracker columns. The key
+# names are matched loosely so either spelling the render side settles on lands.
+_QA_KEYS = {
+    'qa_lufs':         ('lufs', 'integrated_lufs', 'loudness_i', 'input_i', 'i'),
+    'qa_true_peak':    ('true_peak', 'true_peak_db', 'tp', 'dbtp'),
+    'qa_lra':          ('lra', 'loudness_range'),
+    'qa_longest_shot': ('longest_shot', 'longest_shot_s'),
+    'qa_tail_s':       ('tail_s', 'silence_after_last_word', 'tail_silence', 'tail'),
+    'qa_burned_text':  ('burned_text', 'burned_text_0_8', 'burned_text_hook'),
+    'qa_fail':         ('hard_fail', 'hard_fails', 'failed', 'fail'),
+}
+
+
+def _read_qa(short_path):
+    """The render QA dict written next to the Short, or {} if there is none."""
+    for p in (Path(str(short_path) + '.qa.json'), Path(short_path).with_suffix('.qa.json')):
+        if p.exists():
+            try:
+                return json.loads(p.read_text(encoding='utf-8'))
+            except (OSError, ValueError) as e:
+                print(f"      QA file unreadable: {e}")
+    return {}
+
+
+def _qa_fields(qa):
+    """Tracker fields from a (possibly nested) QA dict; the whole dict also goes in qa_json."""
+    flat = {}
+
+    def walk(d):
+        for k, v in d.items():
+            if isinstance(v, dict):
+                walk(v)
+            else:
+                flat.setdefault(str(k).lower(), v)
+    if isinstance(qa, dict):
+        walk(qa)
+    out = {}
+    for field, keys in _QA_KEYS.items():
+        for k in keys:
+            if k in flat:
+                v = flat[k]
+                out[field] = json.dumps(v) if isinstance(v, (list, tuple)) else v
+                break
+    if qa:
+        out['qa_json'] = json.dumps(qa, separators=(',', ':'), default=str)[:45000]
+    return out
+
+
+def _story_fields(story, first_comment):
+    """Packaging and experiment fields logged per upload (sheet_tracker.EXTRA_HEADERS)."""
+    variant = dict(story.get('variant') or {}, exp=story.get('_experiments') or [])
+    return {
+        'header':       story.get('header', ''),
+        'hook_class':   story.get('hook_class') or '',
+        'rubric':       (f"{story['_rubric']}/16 " + json.dumps(story.get('_rubric_pts') or {}, separators=(',', ':'))
+                         if story.get('_rubric') is not None else ''),
+        'variant':      json.dumps(variant, separators=(',', ':')),
+        'context_line': story.get('context_line') or '',
+        'closing_line': story.get('closing_line') or '',
+        'annotations':  json.dumps(story.get('annotations') or [], ensure_ascii=False) if story.get('annotations') else '',
+        'payoff_t':     story.get('payoff_t', ''),
+        'first_comment': first_comment or '',
+    }
+
+
+def _accepted(fn, **kwargs):
+    """The kwargs fn's signature accepts (so A and the render side merge in either order)."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return {}
+    return {k: v for k, v in kwargs.items() if k in params}
+
+
+def _render_kwargs(render):
+    """render= for create_story_short only when the render side accepts it."""
+    return _accepted(create_story_short, render=render)
+
+
+def _qa_burned_text(qa):
+    """True if the render QA hard-failed on burned-in source text (fixable only by another moment)."""
+    return any(str(f).startswith('burned_text') for f in (qa or {}).get('hard_fail') or [])
+
+
+def _print_story(story):
+    total_sec = story.get('_edited_seconds', story.get('_total_seconds', 0))
+    print(f"      Story: [{story['score']}/10] ({story.get('format', 'story_recap')}) {story['storyline_title']}  (~{total_sec:.0f}s total)")
+    print(f"      Summary: {story['storyline_summary']}")
+    print(f"      Opens : \"{story['opening_line']}\" ({story.get('hook_class') or 'no hook_class'})")
+    print(f"      Ends  : \"{story['payoff_line']}\" (payoff at {story.get('payoff_t', 0):.1f}s)")
+    print(f"      Header: {story.get('header', '')}")
+    for key in ('context_line', 'closing_line'):
+        if story.get(key):
+            print(f"      {key}: {story[key]}")
+    for a in story.get('annotations') or []:
+        print(f"      annotation @{a['t']:.1f}s: {a['text']}")
+    if story.get('_rubric') is not None:
+        print(f"      Rubric: {story['_rubric']}/16 {story.get('_rubric_pts')}")
+    print(f"      {len(story['clips'])} clips:")
+    for c in story['clips']:
+        dur = c['end_seconds'] - c['start_seconds']
+        print(f"        [{c['label']}] {c['start_seconds']:.1f}s-{c['end_seconds']:.1f}s ({dur:.0f}s) — {c['description']}")
+
+
+def _select_and_render(tracker, campaign, profile, episode_name, run, segments, all_words, gemini_api_key,
+                       avoid_segments, used_storylines, src_dur, video_path, work_dir, prior_headers=(),
+                       pipeline=None):
+    """
+    Pick the best moment, assign its experiment arm and render it: (story,
+    short_path, qa). When the render QA still finds burned-in source text in
+    the hook window, that moment is set aside and the next one is picked (up
+    to MAX_RESELECT times); other QA hard fails are retried inside the render.
+    Raises WeakMomentSkip (score gate, or every pick had burned-in text).
+    """
+    in_campaign = lambda ep: episode_campaign(ep) == campaign
+    rejected = []   # segments of renders that showed burned-in text
+    for round_ in range(MAX_RESELECT + 1):
+        try:
+            story = _pick_story(segments, all_words, gemini_api_key, list(avoid_segments) + rejected,
+                                used_storylines, campaign, profile, src_dur, video_path=str(video_path),
+                                prior_headers=prior_headers)
+        except WeakMomentSkip as e:
+            e.segments = list(getattr(e, 'segments', None) or []) + rejected
+            raise
+
+        # Experiment arm (blocked randomisation per campaign; nothing runs unless EXPERIMENTS
+        # or EXPERIMENTS_ON switches it on) and the matching render config.
+        render = render_config(profile)
+        try:
+            prior_variants = tracker.get_prior_variants(in_campaign)
+        except Exception as e:
+            print(f"      Prior variants unavailable: {e}")
+            prior_variants = []
+        variant, story['_experiments'] = assign_variant(campaign, render, prior_variants,
+                                                        seed=f"{episode_name}|{run}",
+                                                        enabled=os.environ.get('EXPERIMENTS_ON'))
+        story['variant'] = variant
+        apply_variant(story, variant)
+        render = dict(render, template=variant['template'])
+        render_kwargs = _render_kwargs(render)
+        if render_kwargs and variant['template'] == 'A1':
+            story['hook_emoji'] = ''   # the A1 header carries no emoji
+        print(f"      Variant: {variant} experiments={story['_experiments'] or 'none'}"
+              f"{'' if render_kwargs else ' (renderer has no render= yet: current look)'}")
+        _print_story(story)
+
+        shorts_dir = Path(work_dir) / ('shorts' if not round_ else f'shorts_{round_ + 1}')
+        shorts_dir.mkdir()
+        print("[4/5] Creating story compilation...")
+        short_path = create_story_short(str(video_path), story, str(shorts_dir),
+                                        episode_name, pipeline=pipeline,
+                                        all_words=all_words,
+                                        silence_thresh=profile['silence_thresh'],
+                                        wide_fallback=profile.get('wide_fallback', False),
+                                        **render_kwargs)
+        qa = _read_qa(short_path)
+        if qa:
+            print(f"      Render QA: {_qa_fields(qa)}")
+        if not _qa_burned_text(qa):
+            other = [f for f in (qa or {}).get('hard_fail') or []]
+            if other:
+                # Uploaded anyway while QA is new (a false positive must not stop uploads).
+                print(f"::warning title=Render QA::{episode_name} '{story['storyline_title']}' "
+                      f"uploads with QA hard fails: {'; '.join(map(str, other))}")
+            return story, short_path, qa
+        rejected += [(c['start_seconds'], c['end_seconds']) for c in story['clips']]
+        print(f"      Render QA found burned-in text in '{story['storyline_title']}' — "
+              f"picking another moment ({round_ + 1}/{MAX_RESELECT})")
+    skip = WeakMomentSkip(f"every pick ({MAX_RESELECT + 1}) showed burned-in text in the render QA")
+    skip.segments, skip.score, skip.kind = rejected, story['score'], 'render QA burned text'
+    raise skip
 
 
 def _record_skip(tracker, campaign, episode_name, run, skip):
@@ -180,7 +516,7 @@ def _record_skip(tracker, campaign, episode_name, run, skip):
     print(f"\n{'=' * 70}\nSKIPPED — NOTHING UPLOADED for {episode_name}: {skip}\n{'=' * 70}")
     tracker.log_clips(episode_name, run, [
         {'title': f"{SKIP_PREFIX}p{i + 1}", 'start_seconds': s, 'end_seconds': e,
-         'score': skip.score, 'reason': f"score gate: {skip}"}
+         'score': skip.score, 'reason': f"{getattr(skip, 'kind', 'score gate')}: {skip}"}
         for i, (s, e) in enumerate(skip.segments or [(0.0, 0.0)])
     ])
     skips = tracker.consecutive_skips(lambda ep: episode_campaign(ep) == campaign)
@@ -302,21 +638,26 @@ def main():
             ads = sponsor_segments(video_file_id)
             print(f"      Avoiding {len(ads)} known ad-read segment(s) (SponsorBlock)")
             avoid_segments += ads
+        if profile.get('avoid_first_s'):
+            # Cheap prior next to the burned-text check: opening credits sit early in the episode.
+            avoid_segments.append((0.0, float(profile['avoid_first_s'])))
+            print(f"      Avoiding the first {profile['avoid_first_s']}s (opening credits)")
+        in_campaign = lambda ep: episode_campaign(ep) == campaign
         try:
-            story = _pick_story(segments, all_words, gemini_api_key, avoid_segments, used_storylines,
-                                campaign, profile, src_dur)
+            prior_headers = tracker.get_prior_headers(in_campaign)
+        except Exception as e:
+            print(f"      Prior headers unavailable: {e}")
+            prior_headers = []
+        if textguard is None:
+            print("      Burned-text check unavailable (textguard not installed)")
+        try:
+            story, short_path, qa = _select_and_render(
+                tracker, campaign, profile, episode_name, current_run, segments, all_words, gemini_api_key,
+                avoid_segments, used_storylines, src_dur, video_path, work_dir, prior_headers,
+                diarization_pipeline)
         except WeakMomentSkip as e:
             _record_skip(tracker, campaign, episode_name, current_run, e)
             return
-        total_sec = story.get('_edited_seconds', story.get('_total_seconds', 0))
-        print(f"      Story: [{story['score']}/10] ({story.get('format', 'story_recap')}) {story['storyline_title']}  (~{total_sec:.0f}s total)")
-        print(f"      Summary: {story['storyline_summary']}")
-        print(f"      Opens : \"{story['opening_line']}\"")
-        print(f"      Ends  : \"{story['payoff_line']}\"")
-        print(f"      {len(story['clips'])} clips:")
-        for c in story['clips']:
-            dur = c['end_seconds'] - c['start_seconds']
-            print(f"        [{c['label']}] {c['start_seconds']:.1f}s-{c['end_seconds']:.1f}s ({dur:.0f}s) — {c['description']}")
 
         print("      Generating YouTube metadata...")
         prior_titles = tracker.get_prior_titles()
@@ -324,20 +665,12 @@ def main():
         if yt_meta:
             print(f"      YT title: {yt_meta.get('title', '')}")
 
-        shorts_dir = work_dir / 'shorts'
-        shorts_dir.mkdir()
-        print("[4/5] Creating story compilation...")
-        short_path = create_story_short(str(video_path), story, str(shorts_dir),
-                                        episode_name, pipeline=diarization_pipeline,
-                                        all_words=all_words,
-                                        silence_thresh=profile['silence_thresh'],
-                                        wide_fallback=profile.get('wide_fallback', False))
-
-        if profile.get('min_seconds') or profile.get('max_seconds'):
+        max_sec = story.get('_max_seconds') or profile.get('max_seconds')
+        if profile.get('min_seconds') or max_sec:
             final_dur = _probe_duration(short_path)
             print(f"      Final length: {final_dur:.1f}s")
             if ((profile.get('min_seconds') and final_dur < profile['min_seconds'] - 1) or
-                    (profile.get('max_seconds') and final_dur > profile['max_seconds'] + 2)):
+                    (max_sec and final_dur > max_sec + 2)):
                 raise RuntimeError(f"Rendered short is {final_dur:.1f}s — outside the {campaign} brief's limits")
 
         # Never re-upload: repeat uploads get treated as reused content, seed worse and burn a slot.
@@ -365,8 +698,16 @@ def main():
         # Upload to YouTube as a scheduled post (requires YT_TOKEN_JSON secret)
         yt_video_id = None
         if yt_meta:
+            # The closing line doubles as the first comment (posted after publish, only when enabled).
+            first_comment = story.get('closing_line') or yt_meta.get('pinned_comment', '')
             # Row must exist before update_yt_url fills in scheduled_at / yt_url.
             tracker.log_posting_metadata(episode_name, current_run, story, yt_meta)
+            try:
+                tracker.log_story_fields(episode_name, current_run, story['storyline_title'],
+                                         dict(_story_fields(story, first_comment), **_qa_fields(qa)))
+            except Exception as e:
+                print(f"::warning title=Tracker fields not written::{episode_name} run {current_run}: "
+                      f"header/variant/QA columns skipped ({e})")
             from youtube_client import upload_scheduled, add_to_playlist
             # Profiles without slots publish ASAP, but still only in the US-evening window.
             publish_at = (next_publish_time(profile, slot=pinned_slot)

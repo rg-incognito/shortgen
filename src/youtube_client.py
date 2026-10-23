@@ -104,3 +104,27 @@ def upload_scheduled(video_path, title, description, tags_str, publish_at_iso):
             print(f"    YT upload {int(status.progress() * 100)}%")
 
     return response['id']
+
+
+# Posting the first comment is a write action the user has not approved yet, so
+# it only runs when AUTO_FIRST_COMMENT=1 is set (and fetch_analytics.py
+# --post-first-comments is passed). commentThreads.insert may need the
+# youtube.force-ssl scope: re-run setup_yt_oauth.py with it if it returns 403.
+def first_comment_enabled():
+    return os.environ.get('AUTO_FIRST_COMMENT', '').strip() == '1'
+
+
+def post_comment(video_id, text):
+    """Post text as a top-level comment on a public video; returns the comment thread id."""
+    if not first_comment_enabled():
+        raise RuntimeError('first-comment posting is off (set AUTO_FIRST_COMMENT=1 to enable)')
+    text = (text or '').strip()
+    if not text:
+        raise ValueError('empty comment')
+    svc = _build_svc()
+    resp = svc.commentThreads().insert(
+        part='snippet',
+        body={'snippet': {'videoId': video_id,
+                          'topLevelComment': {'snippet': {'textOriginal': text[:500]}}}},
+    ).execute()
+    return resp['id']
