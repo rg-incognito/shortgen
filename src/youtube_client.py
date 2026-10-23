@@ -59,19 +59,14 @@ def add_to_playlist(video_id, playlist_title):
     return playlist_id
 
 
-def upload_scheduled(video_path, title, description, tags_str, publish_at_iso):
+def upload_body(title, description, tags_str, publish_at_iso, paid_promotion=False):
     """
-    Upload a video to YouTube as a private scheduled post.
-
-    publish_at_iso — ISO 8601 UTC string, e.g. '2026-05-23T09:00:00Z'
-    Returns the YouTube video ID.
+    (part, body) for videos.insert. paid_promotion sets the "includes paid
+    promotion" disclosure (videos resource paidProductPlacementDetails.
+    hasPaidProductPlacement, its own part); only campaigns whose brief requires
+    the paid-partnership toggle pass it.
     """
-    # An @handle-first title reads as promo/spam and gets no curiosity hook.
-    if title.lstrip().startswith('@'):
-        raise ValueError(f"Refusing to upload a title that starts with an @handle: {title!r}")
-    svc  = _build_svc()
     tags = [t.strip() for t in tags_str.split(',') if t.strip()]
-
     body = {
         'snippet': {
             'title':           title[:100],
@@ -90,12 +85,32 @@ def upload_scheduled(video_path, title, description, tags_str, publish_at_iso):
             'madeForKids':             False,
         },
     }
+    part = 'snippet,status'
+    if paid_promotion:
+        body['paidProductPlacementDetails'] = {'hasPaidProductPlacement': True}
+        part += ',paidProductPlacementDetails'
+    return part, body
+
+
+def upload_scheduled(video_path, title, description, tags_str, publish_at_iso, paid_promotion=False):
+    """
+    Upload a video to YouTube as a private scheduled post.
+
+    publish_at_iso — ISO 8601 UTC string, e.g. '2026-05-23T09:00:00Z'
+    paid_promotion — tick "includes paid promotion" (campaign briefs that require it).
+    Returns the YouTube video ID.
+    """
+    # An @handle-first title reads as promo/spam and gets no curiosity hook.
+    if title.lstrip().startswith('@'):
+        raise ValueError(f"Refusing to upload a title that starts with an @handle: {title!r}")
+    part, body = upload_body(title, description, tags_str, publish_at_iso, paid_promotion)
+    svc  = _build_svc()
 
     media = MediaFileUpload(
         video_path, mimetype='video/mp4',
         resumable=True, chunksize=5 * 1024 * 1024,
     )
-    req = svc.videos().insert(part='snippet,status', body=body, media_body=media)
+    req = svc.videos().insert(part=part, body=body, media_body=media)
 
     response = None
     while response is None:

@@ -179,6 +179,10 @@ def _render_config(render, story, wide_fallback=False):
         'header': bool(render.get('header', template == 'A1')),
         'overlays': bool(render.get('overlays_allowed', True)) and variant.get('overlay', 'on') != 'off',
         'handle': render.get('handle'),
+        # A brief-required label ("BILF Podcast" for the whole clip) is kept through the
+        # QA safe re-encode, and may be drawn larger than a channel handle.
+        'handle_required': bool(render.get('handle_required')),
+        'handle_size': render.get('handle_size'),
         'tail_s': tail,
         'max_hold': _MAX_HOLD_A if niche == 'A' else max(tail, _MAX_HOLD_B),
         'reaction_cut': niche == 'A',
@@ -545,7 +549,8 @@ def _caption_settings(cfg, stats):
             y = int(min(_CAP_CLAMP[1], max(_CAP_CLAMP[0], face_bottom + 110)))
             print(f"  Captions moved to y {y} (face bottom at {face_bottom:.0f})")
     return {'template': cfg['template'], 'caption_preset': cfg['caption_preset'],
-            'caption_y': y, 'names': cfg['names'], 'handle': cfg['handle']}
+            'caption_y': y, 'names': cfg['names'], 'handle': cfg['handle'],
+            'handle_size': cfg.get('handle_size')}
 
 
 def _overlay_settings(story, cfg, segments, words_out):
@@ -608,7 +613,9 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
         if cfg and fixable:
             print(f"  QA failed ({'; '.join(fixable)}) — re-encoding without overlays")
             enc = burn_captions(merged_path, out_path, all_words or [], segments,
-                                render=dict(render_cfg or {}, handle=None),
+                                render=dict(render_cfg or {},
+                                            handle=(render_cfg or {}).get('handle') if cfg.get('handle_required')
+                                            else None),
                                 overlays={'header': (story.get('header') or story.get('hook_text'))
                                           if cfg['header'] else None,
                                           'last_word_end': words_out[-1]['end'] if words_out else None})
