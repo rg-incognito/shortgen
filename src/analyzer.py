@@ -69,7 +69,8 @@ _CONFLICT_LINE = re.compile(
     r"you (lied|did|said|never|ate|took|kissed|slept)\b)", re.IGNORECASE)
 # Which originality layer each genre gets (virality spec section 8).
 GENRES = {'friends': 'sitcom', 'loveisblind': 'reality', 'loveandjustice': 'reality',
-          'markmanson': 'podcast', 'unpacked': 'talk', 'youngla': 'talk'}
+          'markmanson': 'podcast', 'unpacked': 'talk', 'youngla': 'talk',
+          'tonyhawk': 'sitcom', 'bilf': 'podcast'}
 
 # First words that make a scrolling viewer leave: filler, connectives, setup.
 FILLER_OPENERS = {'so', 'um', 'umm', 'uh', 'uhh', 'er', 'erm', 'hmm', 'mm', 'mhm', 'okay', 'ok',
@@ -780,12 +781,131 @@ Rules (brand requirements — breaking any of these gets the clip rejected):
 - pinned_comment: a short fun question about the moment."""
 
 
+_TONY_PROMPT = """You are a short-form video editor clipping the FINALE of "Tony Stock: Pro Trader", Ramp's scripted comedy series: skate legends Tony Hawk and Bam Margera play day traders in 2006. This is an official brand clipping campaign, but the clip must feel like a funny fan clip of the show, never like an ad.
+
+Some footage files are the finale episode itself, others are vertical recap cuts of the finale and its livestream that may repeat the same moments.
+
+Find the best standalone moments in this footage for a vertical YouTube Short. The brief: the clip must tell a Tony and Bam story, and its hook must match what the clip delivers.
+
+WHAT WORKS (ranked):
+1. Tony and Bam back-and-forth that builds to a real laugh: a terrible plan, a bit that escalates, one roasting the other, a reaction that sells it
+2. Skaters out of place in the stock world: the 2006 trading-floor throwback, finance jargon used hilariously wrong, skate energy in a suit-and-tie room
+3. A genuine surprise or reveal that gets a laugh (a twist, an unexpected guest, a deadpan answer)
+
+HARD RULES (the brand rejects clips that break these):
+- ONE continuous scene. 1-3 clips from that same scene, back-to-back, in chronological order.
+- Start at the START of a line, never mid-sentence. End right after the funny part lands (the laugh or the reaction), not on the next setup.
+- Tony and/or Bam must drive the moment. Never pick a stretch that is mostly a product pitch, a logo or end card, someone explaining what Ramp does, or b-roll with no dialogue.
+- Nothing NSFW, no heavy swearing, nothing political. Never pick a line that sounds like real investment advice, a stock tip or a money claim taken out of the comedy.
+- Clips must NOT overlap each other or the previously used segments.
+
+Previously used moments (AVOID these themes; recap cuts repeat finale moments, so avoid the same joke too): {used_storylines}
+
+Previously used segments (AVOID these timestamps): {used_segments}
+
+Transcript, one numbered sentence per line (format: S<number> [start_sec-end_sec] text):
+{transcript}
+
+Field rules:
+- storyline_title: snake_case, max 40 chars
+- series_tag: always "tony_stock"
+- header: 4-9 words, ALL CAPS, names Tony or Bam and states the situation or your stance on it (e.g. "BAM MARGERA RUNS THE TRADING DESK NOW"), never the punchline. It is on screen for the whole clip. NEVER promotional: no Ramp, no product, no "sign up", no stock tips, no money promises.
+- hook_emoji: 1-2 emoji that fit the comedy (😭 💀 😂 🛹 📉) or "" if none fit"""
+
+_TONY_YT_PROMPT = """You write YouTube Shorts metadata for a clip of "Tony Stock: Pro Trader", the comedy series where Tony Hawk and Bam Margera play 2006 day traders (finale). It must read like a fan posting a funny clip, NEVER like an ad.
+
+Moment : {storyline}
+Summary: {summary}
+
+Return ONLY valid JSON, no markdown:
+{{
+  "title": "Tony Hawk was not ready for Bam's trading plan 😭",
+  "description": "Bam had one job on the trading desk.\\nTony's face says it all.\\n\\nTony Stock: Pro Trader finale @tryramp\\n\\n#TonyHawk #BamMargera #TonyStock",
+  "tags": "Tony Hawk, Bam Margera, Tony Stock Pro Trader, Tony Stock finale, skateboarding legends",
+  "pinned_comment": "Who's the better trader, Tony or Bam? 👇"
+}}
+
+Rules (brand requirements — breaking any of these gets the clip rejected):
+- Describe ONLY what actually happens in this clip. Do not invent events, quotes or outcomes. No clickbait.
+- title: starts with "Tony Hawk" or "Bam Margera", short, fun, conversational.
+- description: 1-2 short fun lines about the moment → blank line → a line that contains "@tryramp" (e.g. "Tony Stock: Pro Trader finale @tryramp") → blank line → 3-5 hashtags (names, the show).
+- It must NOT sound like an ad: never "sign up", "check out Ramp", "Ramp is/helps/lets/saves", "try it", "link in bio", discounts, product features or any call to action. @tryramp is a tag, not a pitch.
+- NEVER stock tips, investment advice, price predictions, money promises or fake claims. Nothing NSFW or political.
+- tags: 5-10 specific tags (names, show), no brand slogans.
+- pinned_comment: a short fun question about the moment (who was funnier, what Bam does next)."""
+
+
+_BILF_PROMPT = """You are a short-form editor clipping the BILF Podcast ("Boss I'd Like to Follow", hosted by Mara Dorne: founders, CEOs, artists and personalities on how they built what they built) for an official, brand-approved clipping campaign run by Runback.TV.
+
+The audience: millennials deep into their careers or making the jump to their own business. They want real talk about money, work and building something, from people who have done it. The goal: someone sees the clip, has an opinion, and goes to find the full episode.
+
+Find the best standalone moments in this episode for a vertical YouTube Short.
+
+WHAT WORKS (ranked):
+1. Money numbers said out loud: an exit, a deal, a first paycheck, what something cost, a stat that stings
+2. Founder lessons: the mistake, the pivot, the rejection, the thing they would do differently
+3. Hot takes on business, work, money, dating or success that people will argue with in the comments
+4. Behind-the-scenes stories: what happened in the room before anyone knew their name
+5. Mara's question plus the guest's answer: she asks what everyone is thinking, and the pair is often the whole clip
+6. Funny and candid beats: the laugh, the pause, the answer nobody expected
+
+HARD RULES (the brand rejects clips that break these):
+- ONE clear moment. 1-2 clips from one continuous passage, back-to-back, chronological.
+- Open on the strongest line, not the setup. It must be a complete thought: never cut mid-thought.
+- KEEP IT POSITIVE: Mara and every guest must look like the bosses they are. Nothing that mocks or embarrasses them, nothing taken out of context, never start or stop the clip so a line means something different.
+- NEVER include a sponsor read, ad break, promo code, "this episode is brought to you by" or any product plug.
+- Nothing NSFW, violent or political.
+- Clips must NOT overlap each other or the previously used segments (these also include known ad-read segments).
+
+Previously used moments from this episode (AVOID these ideas): {used_storylines}
+
+Previously used / forbidden segments (AVOID these timestamps): {used_segments}
+
+Transcript, one numbered sentence per line (format: S<number> [start_sec-end_sec] text):
+{transcript}
+
+Field rules:
+- storyline_title: snake_case, max 40 chars
+- storyline_summary: one sentence that names the guest (full name) and the moment
+- series_tag: always "bilf"
+- header: 4-9 words, ALL CAPS, names the guest or Mara and states the question or stake the clip answers (not the answer). Accurate to what is said. Not shown on this campaign's video (the show label is), kept for the logs.
+- context_line: REQUIRED here. It is the text hook on screen for the first 2.5 seconds: 4-10 words, names the guest and the stake (e.g. "Stax founder on getting turned down by every bank"). It must match what the clip delivers, never overpromise, never mock, and never put words in quotation marks.
+- closing_line: a question that invites a take in the comments (e.g. "Would you have quit your job for this?").
+- hook_emoji: usually "" for this show; at most one if it really fits"""
+
+_BILF_YT_PROMPT = """You write YouTube Shorts metadata for a clip of the BILF Podcast ("Boss I'd Like to Follow", hosted by Mara Dorne). Audience: career millennials and founders who want real talk about money, work and building something.
+
+Moment : {storyline}
+Summary: {summary}
+
+Return ONLY valid JSON, no markdown:
+{{
+  "title": "<guest's full name> on <the concrete stake of THIS moment>",
+  "description": "<a hook, a take or a question about THIS moment that invites a reply>\\n\\n<guest's full name> on the BILF Podcast @bilfpod\\n\\n#bilfpodpartner #BILFPodcast #<topic>",
+  "tags": "BILF Podcast, Mara Dorne, <guest's full name>, <company or show>, <topic>",
+  "pinned_comment": "<a genuine question about the idea that invites opinions> 👇"
+}}
+
+Rules (brand requirements — breaking any of these gets the clip rejected):
+- Describe ONLY what is actually said in this clip. No misleading hooks, no claims the clip does not deliver.
+- Put words in quotation marks ONLY if they were said word for word in the clip; otherwise paraphrase without quotes.
+- title: starts with the guest's full name (or "Mara Dorne" if it is her moment), then the concrete stake. Positive or neutral: never mock or embarrass the guest or Mara.
+- description: line 1 leads with a hook, a take or a question that invites a reply → blank line → a line that names the guest "on the BILF Podcast" and tags @bilfpod → blank line → hashtags line that includes #bilfpodpartner (3-5 hashtags).
+- Call to action: pick ONE at random and vary it from post to post: none at all, "Full episode on the BILF Podcast YouTube channel", or "Watch the full conversation: @bilfpod on YouTube".
+- Write it for this clip: nothing copy-pasted, nothing that reads like an ad (no "sponsored", promo codes, discounts or links), never call this page official.
+- tags: 5-10 specific tags (show, host, guest, company, topic).
+- Nothing NSFW, no swearing, nothing political.
+- pinned_comment: a genuine question about the idea that invites discussion."""
+
+
 _PROMPTS = {
     'youngla':        (_YLA_PROMPT, _YLA_YT_PROMPT),
     'loveisblind':    (_LIB_PROMPT, _LIB_YT_PROMPT),
     'markmanson':     (_SOLVED_PROMPT, _SOLVED_YT_PROMPT),
     'loveandjustice': (_LJ_PROMPT, _LJ_YT_PROMPT),
     'unpacked':       (_UNPACKED_PROMPT, _UNPACKED_YT_PROMPT),
+    'tonyhawk':       (_TONY_PROMPT, _TONY_YT_PROMPT),
+    'bilf':           (_BILF_PROMPT, _BILF_YT_PROMPT),
 }
 
 # Shape example per campaign. Sentence numbers are 0 placeholders: the model
@@ -822,6 +942,28 @@ _EXAMPLES = {
                 'A 250 POUND BODYBUILDER VS A DARK ESCAPE ROOM', '😭', 'scene',
                 'The lights go out and he panics', 'AV',
                 'Strongest guy in the room, scared of the dark', 'Would you last longer than him? 😭', None),
+    'tonyhawk': ('standalone_scene', 'bam_pitches_his_trading_plan',
+                 'Bam walks Tony through his trading plan and Tony slowly realises it is a skate trick',
+                 'tony_stock', 'BAM MARGERA RUNS THE TRADING DESK NOW', '😭', 'scene',
+                 "Bam's plan and Tony's reaction", 'MA',
+                 None, 'Tony deserved a better desk partner 😭', None),
+    'bilf': ('standalone_scene', 'founder_turned_down_by_every_bank',
+             'The guest describes being turned down by every bank before building her company', 'bilf',
+             'WHAT EVERY BANK TOLD THIS FOUNDER', '', 'scene',
+             'She opens on the rejection and lands the lesson', 'ST',
+             'Founder on hearing no from every bank in the room', 'Would you have kept going after that? 👇',
+             None),
+}
+
+# Campaign-specific originality layer, when the brief allows less (or asks for more) than the genre default.
+_CAMPAIGN_LAYER_RULES = {
+    'tonyhawk': ('Originality layer for this brand: the header (on screen the whole clip) states the Tony and Bam '
+                 'situation or your stance, and closing_line is your verdict or a fun question for the viewer '
+                 '(e.g. "Tony deserved a better desk partner"). context_line: null and annotations: [] (the brief '
+                 'allows no other text). Nothing promotional: no Ramp, no product, no call to action, no stock tips.'),
+    'bilf': ('Primary layer for this podcast: context_line is REQUIRED, it is the on-screen text hook for the first '
+             '2.5 s (names the guest and the stake, matches what the clip delivers); closing_line is a question that '
+             'invites a take. Never quotation marks around words that were not said verbatim. annotations: [].'),
 }
 
 _LAYER_RULES = {
@@ -893,7 +1035,7 @@ HOW TO PICK AND CUT (these rules override anything above):
 - opening_line: the first sentence of the first clip, copied VERBATIM. payoff_line: the last sentence of the last clip, copied VERBATIM.
 - header (replaces hook_text): at most 9 words, ALL CAPS, no emoji, names a person and states the SITUATION or a STANCE (a side, a verdict, a superlative), never the reveal or the punchline. No content word from payoff_line or reveal; {_vague_rule()}. Do not start with the same three words as a recent header: {recent}.
 - reveal: what the ending reveals, in plain words (only used to check the header does not give it away).
-- ORIGINALITY LAYER (YouTube demotes clips that add nothing original). {_LAYER_RULES.get(genre, _LAYER_RULES['sitcom'])}
+- ORIGINALITY LAYER (YouTube demotes clips that add nothing original). {_CAMPAIGN_LAYER_RULES.get(campaign) or _LAYER_RULES.get(genre, _LAYER_RULES['sitcom'])}
 - header, context_line, closing_line and annotations are YOUR voice: an opinion, context or a question. Never quote or paraphrase the dialogue, never narrate what is on screen, never mock or insult anyone in the clip.
 - Score each candidate 1-10, honestly and harshly (an ordinary moment is a 5): hook_strength = would a stranger stop scrolling on the opening line alone; payoff_strength = does the ending land (laugh, reveal, verdict, reaction); standalone_clarity = does it make sense with zero context.
 - rubric, each 0-2, honestly: stake (2 = the situation fits in 6 words with a person and a concrete noun or event; 0 = abstract), payoff (2 = a clear reversal or punchline; 0 = none), emotion (2 = high-arousal; 1 = wholesome with stakes; 0 = mild or nostalgic), framing (2 = the header states a specific conflict or stance; 1 = generic; 0 = a vague tease), originality (2 = your lines add a stance, context or comparison that is not a description; 1 = annotations only; 0 = none).
@@ -927,12 +1069,11 @@ def _parse_json(raw):
     return json.loads(raw)
 
 
-def generate_yt_metadata(story, episode_name, api_key, retries=3, campaign='friends',
-                         title_names=None, recent_titles=None):
-    api_key = api_key.strip()
+def yt_metadata_prompt(story, episode_name, campaign='friends', title_names=None, recent_titles=None,
+                       notes=None):
+    """The metadata prompt (notes: per-episode facts such as the guest's name)."""
     m = re.search(r'[Ss](\d+)[Ee](\d+)', episode_name)
     ep_str = f"S{int(m.group(1))}E{int(m.group(2))}" if m else episode_name
-
     template = _PROMPTS.get(campaign, (_PROMPT, _YT_PROMPT))[1]
     prompt = template.format(
         episode_str=ep_str,
@@ -940,7 +1081,16 @@ def generate_yt_metadata(story, episode_name, api_key, retries=3, campaign='frie
         summary=story['storyline_summary'],
         series_tag=story.get('series_tag', 'gang_together'),
         score=story['score'],
-    ) + _title_rules(campaign, story, title_names, recent_titles)
+    )
+    if notes:
+        prompt += f"\n\nEpisode notes: {notes}"
+    return prompt + _title_rules(campaign, story, title_names, recent_titles)
+
+
+def generate_yt_metadata(story, episode_name, api_key, retries=3, campaign='friends',
+                         title_names=None, recent_titles=None, notes=None):
+    api_key = api_key.strip()
+    prompt = yt_metadata_prompt(story, episode_name, campaign, title_names, recent_titles, notes)
     payload = {
         'contents': [{'parts': [{'text': prompt}]}],
         'generationConfig': {'temperature': 0.7},
@@ -955,10 +1105,9 @@ def generate_yt_metadata(story, episode_name, api_key, retries=3, campaign='frie
     return None
 
 
-def analyze_candidates(sents, api_key, used_segments=None, used_storylines=None, retries=5,
-                       campaign='friends', limits=(12, 40), target=None, genre=None, recent_headers=None):
-    """Ask Gemini for 3-5 candidate moments over the numbered sentences; returns the raw candidate dicts."""
-    api_key = api_key.strip()
+def candidates_prompt(sents, used_segments=None, used_storylines=None, campaign='friends', limits=(12, 40),
+                      target=None, genre=None, recent_headers=None, hints=None):
+    """The moment-picking prompt (hints: per-episode notes such as the guest and flagged moments)."""
     used_str = (
         ', '.join(f"{s:.0f}s-{e:.0f}s" for s, e in used_segments)
         if used_segments else 'none'
@@ -971,7 +1120,19 @@ def analyze_candidates(sents, api_key, used_segments=None, used_storylines=None,
         transcript=format_sentences(sents),
         used_segments=used_str,
         used_storylines=storylines_str,
-    ) + _answer_rules(campaign, limits, target=target, genre=genre, recent_headers=recent_headers)
+    )
+    if hints:
+        prompt += f"\n\nEPISODE NOTES:\n{hints}"
+    return prompt + _answer_rules(campaign, limits, target=target, genre=genre, recent_headers=recent_headers)
+
+
+def analyze_candidates(sents, api_key, used_segments=None, used_storylines=None, retries=5,
+                       campaign='friends', limits=(12, 40), target=None, genre=None, recent_headers=None,
+                       hints=None):
+    """Ask Gemini for 3-5 candidate moments over the numbered sentences; returns the raw candidate dicts."""
+    api_key = api_key.strip()
+    prompt = candidates_prompt(sents, used_segments, used_storylines, campaign, limits, target, genre,
+                               recent_headers, hints)
 
     payload = {
         'contents': [{'parts': [{'text': prompt}]}],

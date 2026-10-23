@@ -23,8 +23,8 @@ from sheet_tracker import SheetTracker, SKIP_PREFIX
 from campaigns import (get_campaign, find_banned, find_transcript_banned, enforce_caption,
                        next_publish_time, publish_plan, window_publish_time, episode_campaign, SLOT_GUARD_MIN,
                        tidy_title, title_problems, clean_hashtags, header_problems, overlay_checks,
-                       render_config, length_plan, story_max_seconds, layer_caps, rubric_gate,
-                       assign_variant, apply_variant)
+                       render_config, length_plan, story_max_seconds, layer_caps, rubric_gate, clip_text,
+                       assign_variant, apply_variant, EXPERIMENTS, moment_hints, quote_problems, episode_guest)
 from footage import download_from_release, sponsor_segments
 
 try:   # render side (Coder B); absent until that branch is merged
@@ -58,6 +58,20 @@ def _sha1(path):
         for chunk in iter(lambda: f.read(1 << 20), b''):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _is_vertical(path):
+    """True if the video's first stream is taller than wide (False when it cannot be probed)."""
+    try:
+        out = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height',
+             '-of', 'csv=p=0:s=x', str(path)],
+            capture_output=True, text=True, timeout=60,
+        ).stdout.strip()
+        w, h = (int(v) for v in out.splitlines()[0].split('x')[:2])
+        return h > w
+    except Exception:
+        return False
 
 
 def _probe_duration(path):
@@ -130,6 +144,16 @@ def _apply_layers(story, all_words, profile):
     reality/drama only. Returns hard problems (a header that echoes the
     dialogue). Sets story['_layers'] to the lines that survived.
     """
+    if all_words:
+        story['_clip_text'] = clip_text(story, all_words)   # metadata checks quotes against it
+    # A brief can limit which overlay lines it allows (tonyhawk: header + closing line only).
+    allowed = profile.get('overlay_fields')
+    if allowed is not None:
+        for field in ('context_line', 'closing_line'):
+            if field not in allowed:
+                story[field] = None
+        if 'annotations' not in allowed:
+            story['annotations'] = []
     bad = overlay_checks(story, all_words, profile)
     problems = []
     if 'header' in bad:
@@ -161,6 +185,9 @@ def _v2_problems(story, profile, gate):
         problems.append(f"ends {story['_payoff_tail']:.1f}s after the payoff (max {PAYOFF_MAX_TAIL:g}s)")
     if render_config(profile).get('overlays_allowed') and not story.get('_layers'):
         problems.append("no originality layer survived (closing/context line or annotations)")
+    for field in profile.get('required_layers') or []:
+        if field not in (story.get('_layers') or []):
+            problems.append(f"required {field} missing or dropped")
     if story.get('_rubric') is not None and story['_rubric'] < gate:
         problems.append(f"rubric {story['_rubric']}/16 < {gate}")
     return problems
@@ -200,7 +227,7 @@ def _candidate_problems(story, sents, all_words, used, profile, video_path=None,
 
 
 def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storylines,
-                campaign, profile, src_dur, attempts=3, video_path=None, prior_headers=()):
+                campaign, profile, src_dur, attempts=3, video_path=None, prior_headers=(), hints=''):
     """
     Ask Gemini for 3-5 candidate moments as sentence ranges, cut them on whole
     sentences, rank them in code (0.4 hook + 0.3 payoff + 0.2 clarity + 0.1
@@ -222,10 +249,11 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
                            wide_fallback=profile.get('wide_fallback', False))
     avoid = list(used_segments)
     best_weak = None
+    hint_kw = {'hints': hints} if hints else {}   # episode notes (guest, flagged moments)
     for attempt in range(1, attempts + 1):
         raws = analyze_candidates(sents, gemini_api_key, used_segments=avoid,
                                   used_storylines=used_storylines, campaign=campaign, limits=limits,
-                                  target=target, genre=genre, recent_headers=list(prior_headers))
+                                  target=target, genre=genre, recent_headers=list(prior_headers), **hint_kw)
         ranked, used = [], list(avoid)   # candidates of one answer may overlap each other
         for raw in raws:
             story, problems = build_candidate(raw, sents, all_words)
@@ -299,10 +327,13 @@ def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior
     all_titles = [t for _, t in prior_titles]
     campaign_titles = [t for ep, t in prior_titles if episode_campaign(ep) == campaign]
     fallback = vague_fallback = None
+    guest = episode_guest(profile, episode_name)
+    notes_kw = {'notes': f"Guest in this clip: {guest} (name them in the title or caption)."} if guest else {}
+    finish = lambda m: clean_hashtags(enforce_caption(m, profile, episode_name), profile, episode_name)
     for attempt in range(1, attempts + 1):
         yt_meta = generate_yt_metadata(story, episode_name, gemini_api_key, campaign=campaign,
                                        title_names=profile.get('title_names'),
-                                       recent_titles=campaign_titles[-30:])
+                                       recent_titles=campaign_titles[-30:], **notes_kw)
         if not yt_meta:
             break
         yt_meta['title'] = tidy_title(str(yt_meta.get('title', '')))
@@ -312,8 +343,12 @@ def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior
         banned = find_banned(text, profile)
         if banned:
             hard.append(f"banned words {banned}")
+        if profile.get('verbatim_quotes') and story.get('_clip_text') is not None:
+            misquoted = quote_problems(text, story['_clip_text'])
+            if misquoted:
+                hard.append(f"quotes words not said in the clip {misquoted}")
         if not hard and not soft:
-            return clean_hashtags(enforce_caption(yt_meta, profile), profile)
+            return finish(yt_meta)
         print(f"      Metadata attempt {attempt} rejected ({yt_meta['title']!r}): {'; '.join(hard + soft)}")
         if not hard and not fallback:
             fallback = yt_meta
@@ -323,11 +358,11 @@ def _make_metadata(story, episode_name, gemini_api_key, campaign, profile, prior
             vague_fallback = yt_meta
     if fallback:
         print(f"      Using {fallback['title']!r} despite soft title issues")
-        return clean_hashtags(enforce_caption(fallback, profile), profile)
+        return finish(fallback)
     if vague_fallback:
         print(f"::warning title=Vague title::{episode_name}: using {vague_fallback['title']!r} "
               f"(every attempt used a vague word)")
-        return clean_hashtags(enforce_caption(vague_fallback, profile), profile)
+        return finish(vague_fallback)
     if not yt_meta:
         return None
     raise RuntimeError(f"Could not generate {campaign} metadata that passes the title rules")
@@ -449,11 +484,16 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
     """
     in_campaign = lambda ep: episode_campaign(ep) == campaign
     rejected = []   # segments of renders that showed burned-in text
+    hints = moment_hints(profile, episode_name)
+    # A native 9:16 source (e.g. a brand's vertical recap cut) needs no 4:5 window crop.
+    vertical = bool(profile.get('vertical_template')) and _is_vertical(video_path)
+    if vertical:
+        print(f"      Vertical source: template {profile['vertical_template']} (full frame)")
     for round_ in range(MAX_RESELECT + 1):
         try:
             story = _pick_story(segments, all_words, gemini_api_key, list(avoid_segments) + rejected,
                                 used_storylines, campaign, profile, src_dur, video_path=str(video_path),
-                                prior_headers=prior_headers)
+                                prior_headers=prior_headers, **({'hints': hints} if hints else {}))
         except WeakMomentSkip as e:
             e.segments = list(getattr(e, 'segments', None) or []) + rejected
             raise
@@ -469,6 +509,8 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
         variant, story['_experiments'] = assign_variant(campaign, render, prior_variants,
                                                         seed=f"{episode_name}|{run}",
                                                         enabled=os.environ.get('EXPERIMENTS_ON'))
+        if vertical and 'template' not in [EXPERIMENTS[e]['factor'] for e in story['_experiments']]:
+            variant['template'] = profile['vertical_template']
         story['variant'] = variant
         apply_variant(story, variant)
         render = dict(render, template=variant['template'])
@@ -713,12 +755,15 @@ def main():
             publish_at = (next_publish_time(profile, slot=pinned_slot)
                           or window_publish_time(tracker.get_next_publish_slot()))
             print(f"[5b] Scheduling on YouTube → {publish_at}...")
+            # Briefs that require a paid-partnership disclosure set paid_promotion.
+            paid_kw = {'paid_promotion': True} if profile.get('paid_promotion') else {}
             yt_video_id = upload_scheduled(
                 short_path,
                 yt_meta['title'],
                 yt_meta['description'],
                 yt_meta['tags'],
                 publish_at,
+                **paid_kw,
             )
             print(f"      https://youtu.be/{yt_video_id}")
             tracker.update_yt_url(episode_name, current_run,

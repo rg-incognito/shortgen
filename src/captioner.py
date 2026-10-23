@@ -680,11 +680,12 @@ def _balanced_two(draw, text, font, max_w):
     return best[1] if best else _wrap_lines(draw, text, font, max_w)
 
 
-def render_overlay_png(out_path, template, header=None, handle=None, handle_y=None):
+def render_overlay_png(out_path, template, header=None, handle=None, handle_y=None, handle_size=None):
     """
     Persistent overlay layer: the A1 headline in the top blur band (Montserrat
     ExtraBold Italic, ALL CAPS, line 1 white / line 2 #FFE600, no emoji) and the
-    optional channel handle. Returns the handle's box (x0, y0, x1, y1) or None.
+    optional channel handle (or a brief-required show label, drawn at
+    handle_size px, fully opaque). Returns the handle's box (x0, y0, x1, y1) or None.
     """
     layer = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
     if header and template == 'A1':
@@ -703,17 +704,20 @@ def render_overlay_png(out_path, template, header=None, handle=None, handle_y=No
         layer = Image.alpha_composite(layer, _text_layer(lines, font, cols, sum(_HEAD_BAND) / 2, pitch))
     box = None
     if handle:
-        font = ImageFont.truetype(_font_path(_MONT_SB), _HANDLE_SIZE)
+        size = int(handle_size or _HANDLE_SIZE)
+        label = size > _HANDLE_SIZE          # a required show label: opaque, heavier stroke
+        font = ImageFont.truetype(_font_path(_MONT_XB if label else _MONT_SB), size)
         d = ImageDraw.Draw(layer)
         w = d.textlength(handle, font=font)
         y = handle_y or _HANDLE_A1_Y
         hl = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
         ImageDraw.Draw(hl).text(((_OUT_W - w) / 2, y), handle, font=font, anchor='lm',
-                                fill=(255, 255, 255, _HANDLE_ALPHA), stroke_width=1,
-                                stroke_fill=(0, 0, 0, 90))
+                                fill=(255, 255, 255, 255 if label else _HANDLE_ALPHA),
+                                stroke_width=3 if label else 1,
+                                stroke_fill=(0, 0, 0, 200 if label else 90))
         layer = Image.alpha_composite(layer, hl)
-        box = (int((_OUT_W - w) / 2) - 4, int(y - _HANDLE_SIZE), int((_OUT_W + w) / 2) + 4,
-               int(y + _HANDLE_SIZE))
+        box = (int((_OUT_W - w) / 2) - 4, int(y - size), int((_OUT_W + w) / 2) + 4,
+               int(y + size))
     layer.save(out_path)
     return box
 
@@ -798,7 +802,7 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
         header = ov.get('header') if template == 'A1' else None
         if header or cfg.get('handle'):
             p = os.path.join(work, 'layer.png')
-            box = render_overlay_png(p, template, header, cfg.get('handle'), handle_y)
+            box = render_overlay_png(p, template, header, cfg.get('handle'), handle_y, cfg.get('handle_size'))
             pngs.append((p, None))
             if box and box[3] > _SAFE_BOTTOM:
                 allowed.append(box)

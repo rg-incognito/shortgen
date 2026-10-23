@@ -307,6 +307,184 @@ CAMPAIGNS = {
             r'\bfuck', r'motherf', r'\bbitch', r'\bcunt\b', r'\bnigg', r'\bfag', r'\bretard',
         ],
     },
+
+    # Whop: Clip Farm — Ramp "Tony Stock: Pro Trader" FINALE (Tony Hawk + Bam Margera
+    # comedy, set in 2006). Brief: finale footage only (Drive folder
+    # 1dcgzFmgxP1cqN-I9hFAk912rHxBBw9wP); the clip must tell a Tony and Bam story, start
+    # at the start of a line and end after the laugh; hook and caption match the clip.
+    # Caption: short, fun, must NOT read like an ad ("sign up", "check out Ramp"), MUST tag
+    # @tryramp on YouTube; no clickbait, fake claims or stock tips; no NSFW. Keep 30 days.
+    'tonyhawk': {
+        'source':  'drive_files',
+        'files': [
+            # The 16:9-ish (1440x1080) finale episode first: it is the story source the brief wants.
+            ('1J8UxY4Qsc_U6szlpQhcxln9ghiLkuFsN', 'TONYSTOCK_EP4_FINALE'),
+            # Livestream/finale recap cuts: native 4K vertical (2160x3840), loud mix, probably
+            # alternate edits of the same material. Cut 2 is the shorter version, so it goes last.
+            ('1mUf4xEMpB9PYWweZZ2ZGxzCvZ202B8KA', 'TONYSTOCK_FINALE_RECAP1'),
+            ('1HoeF9bj5VPEiM7prx012-rIdCCupZrxz', 'TONYSTOCK_FINALE_RECAP3'),
+            ('1TKvwxoKA7LuTmiR8Pqry7UG_5NrDshXM', 'TONYSTOCK_FINALE_RECAP2'),
+        ],
+        # The finale runs under 2 minutes (~2-4 clips); the recaps are ~1.5 min each.
+        'max_runs':        3,
+        'archive':         False,    # files belong to the brand's Drive
+        'silence_thresh':  0.45,     # scripted comedy: keep the timing, cut only dead air
+        # Brief: 15-35 s (niche A caps it at 32 s anyway).
+        'min_seconds':     15.0,
+        'max_seconds':     35.0,
+        'playlist':        'Tony Stock: Pro Trader',
+        # Skate / comedy crowd: late-evening scroll.
+        'publish_slots_et': ['22:00'],
+        'title_names':     ['Tony Hawk', 'Bam Margera', 'Tony Stock'],
+        'cast_names':      ['Tony', 'Bam', 'Hawk', 'Margera'],
+        'genre':           'sitcom',
+        # Brief allows our own framing as long as it tells the Tony and Bam story and nothing
+        # is promotional: header (whole clip) + closing line only, no context card, no handle.
+        'render':          _render('A', overlays_allowed=True, names=['Tony', 'Hawk', 'Bam', 'Margera']),
+        'overlay_fields':  ['closing_line'],
+        # A native 9:16 source (the recap cuts) goes full-bleed: the A1 4:5 window would
+        # crop away a third of an already-vertical frame.
+        'vertical_template': 'A2',
+        'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/ce9f2373-a374-491e-8a51-3684d030152a',
+        'required_caption': ['@tryramp'],
+        'caption_footer':   'Tony Hawk and Bam Margera in Tony Stock: Pro Trader @tryramp\n\n#TonyHawk #BamMargera #TonyStock',
+        # Must not read like an ad, no stock tips or fake claims, no NSFW (captions, header, overlays).
+        'banned_patterns': [
+            r'\bsign(ing|ed)? ?up\b', r'check (it )?out ramp', r'\bramp (is|was|makes|helps|lets|gives|saves|has)\b',
+            r'\btry ramp\b', r'\bdownload\b', r'\blink in\b', r'\bpromo\b', r'\bdiscount\b', r'\buse code\b',
+            r'\bfree trial\b', r'\bsponsor', r'#ad\b', r'\bpaid partnership\b', r'\bcorporate cards?\b',
+            r'\b(expense|spend) management\b', r'\bsave (time|money)\b',
+            r'\bstock tips?\b', r'\bfinancial advice\b', r'\binvest(ing|ment)? (in|advice|tip)', r'\bbuy (the|this|these) stocks?\b',
+            r'\bto the moon\b', r'\bguarantee', r'\bget rich\b', r'\bprice target\b', r'\bclickbait\b',
+            r'\bsex\b', r'\bsexy\b', r'\bnsfw\b', r'\bnaked\b',
+            r'\btrump\b', r'\bbiden\b', r'\bharris\b', r'\bdemocrat', r'\brepublican',
+        ],
+        # No NSFW: hard swearing or slurs in the audio rule the moment out.
+        'transcript_banned': [
+            r'\bfuck', r'motherf', r'\bcunt\b', r'\bnigg', r'\bfag', r'\bretard',
+        ],
+    },
+
+    # Whop: Runback.TV — BILF Podcast (Boss I'd Like to Follow, host Mara Dorne).
+    # Brief (footage/bilf_guidelines.md): approved episodes only; 15-60 s (aim 25-45),
+    # 9:16, burned-in subtitles, "BILF Podcast" typed on screen for the WHOLE clip and a
+    # text hook in the first 2 s; caption tags @bilfpod + #bilfpodpartner and names the
+    # guest or episode; nothing ad-like; keep it positive (no mocking, no out-of-context
+    # cuts, quotation marks only for verbatim words); never clip sponsor reads; paid-
+    # promotion disclosure on. Audience: career millennials / founders, real talk about
+    # money, work and building something. 40%+ T1, engagement >= 1.0%.
+    'bilf': {
+        'source':       'release',
+        'release_tag':  'footage-bilf',
+        'files': [
+            # The guidelines' "under-clipped" episodes (approved, less competition).
+            ('V6sjFiYkJvM', 'BILF_V6sjFiYkJvM'),   # Suneera Madhani (Stax founder)
+            ('DIxdW4xQH_w', 'BILF_DIxdW4xQH_w'),   # Alli Webb (Drybar founder)
+            ('WEyv58H3cxk', 'BILF_WEyv58H3cxk'),   # Andrea Carmona (Love Island USA)
+        ],
+        'max_runs':        8,
+        'archive':         False,
+        'silence_thresh':  0.6,
+        'wide_fallback':   True,
+        # Brief 15-60 s, aim 25-45: 20 s keeps a complete moment. Niche B caps a normal clip at
+        # 35 s and lets one escalating single-speaker story run to 60 s.
+        'min_seconds':     20.0,
+        'max_seconds':     40.0,
+        'sponsorblock':    True,
+        'playlist':        'BILF Podcast Clips',
+        # Career millennials with young kids: after bedtime, US evening.
+        'publish_slots_et': ['20:30'],
+        'title_names':     ['BILF Podcast', 'Mara Dorne', 'Suneera Madhani', 'Alli Webb', 'Andrea Carmona'],
+        'cast_names':      ['Mara', 'Dorne', 'Suneera', 'Madhani', 'Alli', 'Webb', 'Andrea', 'Carmona',
+                            'Stax', 'Drybar', 'BILF'],
+        'genre':           'podcast',
+        # On-screen text is required here (context card = the 2 s text hook, closing line),
+        # so framing/originality are reachable; ST openers score 1: 10 of 16.
+        'min_rubric':      10,
+        # "BILF Podcast" for the whole clip: the persistent handle layer is the only text the
+        # render keeps on screen start to end on B1 (the header band exists on A1 only).
+        # handle_required keeps it through the QA safe re-encode; handle_size makes it legible.
+        'render':          _render('B', overlays_allowed=True, handle='BILF Podcast', handle_required=True,
+                                   handle_size=44, names=['Mara', 'Suneera', 'Alli', 'Andrea', 'BILF']),
+        # The text hook in the first 2 s is the context card.
+        'required_layers': ['context_line'],
+        # Quotation marks only around words actually said in the clip.
+        'verbatim_quotes': True,
+        'vague_exempt':    ['life'],
+        # YouTube "includes paid promotion" (the brief's paid-partnership toggle).
+        'paid_promotion':  True,
+        'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/088c2279-ab1d-4434-9ba0-6637ab9311fa',
+        'required_caption': ['@bilfpod', '#bilfpodpartner'],
+        # {guest} is filled per episode from episode_notes (the caption must name the guest).
+        'caption_footer':   '{guest} on the BILF Podcast. Full episode on the BILF Podcast YouTube channel @bilfpod\n\n#bilfpodpartner #BILFPodcast',
+        # Guest names (required in the caption) and the guidelines' under-clipped moments
+        # (episode seconds), passed to the analyzer as priority hints.
+        'episode_notes': {
+            'BILF_V6sjFiYkJvM': {
+                'guest': 'Suneera Madhani', 'about': 'founder of Stax (sold it, then started over in 6 months)',
+                'moments': [
+                    (0, 40, 'cold open: rejected by every bank and every processor, "pale, male and stale"'),
+                    (258, 278, 'sold it, six months later building another one; "you don\'t work enough"'),
+                    (787, 804, 'her secret superpower: her mother lives across the street'),
+                    (1073, 1122, 'pitched Stax to her bosses, laughed out of the room, quit and built it'),
+                    (1131, 1161, 'zero to $40B processed, 400 employees, Series A/B/C, PE exit'),
+                    (1299, 1352, '"Can women have it all?" -> "100%, whatever all looks like to her" -> the three-bucket rule'),
+                    (1741, 1754, 'less than 2% of female founders ever break a million in revenue'),
+                    (1788, 1805, 'nothing bad happens when women make more money'),
+                    (2019, 2042, "Mara's 24-hour rule for decisions"),
+                    (2520, None, '"I\'m going to win the championship"'),
+                ],
+            },
+            'BILF_DIxdW4xQH_w': {
+                'guest': 'Alli Webb', 'about': 'founder of Drybar ($255M exit)',
+                'moments': [
+                    (0, None, 'door to door with a blow dryer, then a $255M exit'),
+                    (210, None, 'rehab, divorce and a death while Drybar was thriving'),
+                    (435, None, 'the branding trick: do the exact opposite'),
+                    (660, None, '"we shouldn\'t have gotten married, truly"'),
+                    (960, None, '"work-life balance is bullsh*t"'),
+                    (1140, None, 'can you actually have it all?'),
+                    (1440, None, 'bawling in a bathroom at Drybar'),
+                    (1650, None, 'her kids: "we don\'t know what version of you we\'re gonna get"'),
+                    (1815, None, '"petty is a choice"'),
+                    (2020, None, "the facelift, and Mara's tummy tuck"),
+                    (2445, None, 'two women vs TikTok'),
+                    (2640, None, '"always be filming"'),
+                ],
+            },
+            'BILF_WEyv58H3cxk': {
+                'guest': 'Andrea Carmona', 'about': 'Love Island USA, painted as the villain, then loved',
+                'moments': [
+                    (20, 72, 'cold open: bullied by kids, "you can go into a hole or..."'),
+                    (284, 300, 'how editing painted her as the villain'),
+                    (566, 620, 'the hate was all kids; her first call off the show'),
+                    (800, None, 'dumped six weeks after'),
+                    (861, 992, 'back for Love Island Games, the breakup'),
+                    (1140, 1222, 'no phone for six weeks; people cheated with the hotel room phone'),
+                    (1466, 1474, '"bad publicity is still publicity" and crashing out online'),
+                    (2044, 2083, 'landing in Miami: stopped everywhere, and it was all love'),
+                ],
+            },
+        },
+        # Sponsor reads and ad breaks are an instant rejection; catch what SponsorBlock misses.
+        'transcript_banned': [
+            r'sponsored by', r'today\'?s sponsor', r'our sponsors?\b', r'word from our', r'brought to you by',
+            r'this episode is (brought|sponsored|presented)', r'promo code', r'use code', r'\bcode \w+ (at|for)\b',
+            r'link in (the )?(bio|description|show notes)', r'percent off', r'\d+ ?% off', r'free trial',
+            r'dot com slash', r'\.com ?/ ?\w+', r'\bsign up (at|today|now)\b',
+            r'\bshopify\b', r'\bbetterhelp\b', r'\bsquarespace\b', r'\bag1\b', r'athletic greens',
+            r'\bnord ?vpn\b', r'\bexpress ?vpn\b', r'\baudible\b', r'\bmasterclass\b', r'\bhello ?fresh\b',
+        ],
+        # Caption / header / overlays: keep it positive and organic, never "official", nothing ad-like.
+        'banned_patterns': [
+            r'\bofficial\b', r'\bsponsor', r'promo code', r'\buse code\b', r'#ad\b', r'\bdiscount\b',
+            r'\bpsycho\b', r'\bcrazy\b', r'\binsane\b', r'\bidiot\b', r'\bstupid\b', r'\bdumb\b',
+            r'\bugly\b', r'\bfat\b', r'\bloser\b', r'\btrash\b', r'\bclown\b', r'\bdelulu\b', r'\bcringe\b',
+            r'\bf+u+c+k', r'sh[i*]t\b', r'\bsex\b', r'\bsexy\b', r'\bnsfw\b', r'\bnaked\b',
+            r'\btrump\b', r'\bbiden\b', r'\bharris\b', r'\bdemocrat', r'\brepublican', r'\bclickbait\b',
+        ],
+    },
+
     # Runway/craft footage with no speech, so these are hand-cut by scripts/jacobco_edits.py and
     # uploaded directly; the profile only maps their episode names for whop_queue.
     # Submissions close Fri 2026-10-23 11:59 PM ET. No demographics ticket (stats come from Content Rewards).
@@ -436,16 +614,67 @@ def find_transcript_banned(story, all_words, profile):
             if re.search(p, text, flags=re.IGNORECASE)]
 
 
-def enforce_caption(yt_meta, profile):
+def episode_guest(profile, episode=None):
+    """The guest named for this episode in the profile's episode_notes, or None."""
+    return ((profile.get('episode_notes') or {}).get(episode or '') or {}).get('guest')
+
+
+def required_caption(profile, episode=None):
+    """Caption text the brief requires: the profile's list, plus the episode's guest when it has one."""
+    required = list(profile.get('required_caption') or [])
+    guest = episode_guest(profile, episode)
+    if guest:
+        required.append(guest)
+    return required
+
+
+def enforce_caption(yt_meta, profile, episode=None):
     """Append the brief's required caption text if the LLM left any of it out."""
-    required = profile.get('required_caption')
+    required = required_caption(profile, episode)
     if not required:
         return yt_meta
     desc = yt_meta.get('description', '')
     missing = [r for r in required if r.lower() not in desc.lower()]
     if missing:
-        yt_meta['description'] = desc.rstrip() + '\n\n' + profile['caption_footer']
+        footer = profile['caption_footer'].replace('{guest}', episode_guest(profile, episode) or 'This guest')
+        yt_meta['description'] = desc.rstrip() + '\n\n' + footer
     return yt_meta
+
+
+def moment_hints(profile, episode=None):
+    """
+    Prompt text for the episode's notes (guest, and moments the brand flagged
+    as worth clipping, in episode seconds), or '' if the profile has none.
+    """
+    notes = (profile.get('episode_notes') or {}).get(episode or '')
+    if not notes:
+        return ''
+    lines = []
+    if notes.get('guest'):
+        about = f" ({notes['about']})" if notes.get('about') else ''
+        lines.append(f"Guest in this episode: {notes['guest']}{about}. Name them correctly.")
+    if notes.get('moments'):
+        lines.append('PRIORITY MOMENTS the show wants clipped (episode seconds; timestamps are approximate, '
+                     'find the matching sentences and still apply every rule). Prefer these over other moments:')
+        for start, end, what in notes['moments']:
+            span = f"{start:.0f}-{end:.0f}s" if end is not None else f"from ~{start:.0f}s"
+            lines.append(f"  - [{span}] {what}")
+    return '\n'.join(lines)
+
+
+_QUOTED = re.compile(r'"([^"]{3,})"|“([^”]{3,})”')
+
+
+def quote_problems(text, transcript):
+    """Quoted spans in text that were not said word for word in the clip (brief: quotes are verbatim only)."""
+    spoken = ' '.join(re.findall(r"[a-z0-9]+", (transcript or '').lower().replace("'", '')))
+    bad = []
+    for m in _QUOTED.finditer(text or ''):
+        q = m.group(1) or m.group(2)
+        words = ' '.join(re.findall(r"[a-z0-9]+", q.lower().replace("'", '').replace('’', '')))
+        if words and f' {words} ' not in f' {spoken} ':
+            bad.append(q)
+    return bad
 
 
 # ---------------------------------------------------------------------------
@@ -555,7 +784,7 @@ def title_problems(title, profile, prior_titles=(), payoff_line='', campaign_tit
     return hard, soft
 
 
-def clean_hashtags(yt_meta, profile):
+def clean_hashtags(yt_meta, profile, episode=None):
     """
     Keep 3-5 specific hashtags: hashtags that spell a required caption term
     (#loveisblind, #Netflix for "Netflix") are always kept, broad ones
@@ -594,7 +823,7 @@ def clean_hashtags(yt_meta, profile):
     yt_meta['description'] = f"{body}\n\n{tail}" if tail else body
     tags = [t.strip() for t in str(yt_meta.get('tags', '')).split(',') if t.strip()]
     yt_meta['tags'] = ', '.join(t for t in tags if t.lower() not in _BROAD_TAGS)
-    return enforce_caption(yt_meta, profile)
+    return enforce_caption(yt_meta, profile, episode)
 
 
 # ---------------------------------------------------------------------------
@@ -737,8 +966,11 @@ def overlay_checks(story, all_words, profile):
             continue
         why = echo_problem(text, transcript, names)
         banned = find_banned(text, profile)
+        misquoted = quote_problems(text, transcript) if profile.get('verbatim_quotes') else []
         if banned:
             why = f'banned words {banned}'
+        elif misquoted:
+            why = f'quotes words not said in the clip {misquoted}'
         elif not why and field == 'context_line' and vague_hits(text, exempt):
             why = f'vague words {vague_hits(text, exempt)}'
         if why:
