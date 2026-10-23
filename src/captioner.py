@@ -730,6 +730,74 @@ def render_overlay_png(out_path, template, header=None, handle=None, handle_y=No
     return box
 
 
+# Brand watermark (a brief-required logo PNG on every frame, e.g. "@ladbible").
+# render['watermark'] = {'file': 'assets/watermarks/x.png' (repo-relative), 'width_frac': share of
+# the 1080 px width, 'pos': 'top' | 'center_low', optional 'y' (top edge px, overrides pos)}.
+# Placement stays inside the Shorts safe zone: above y _SAFE_BOTTOM (title / channel UI), left
+# of the right-hand button rail (x 990), clear of the A1 header band and the caption line.
+_REPO_DIR      = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+_WM_TOP        = {'A1': _HEAD_BAND[1] + 24, 'A2': 150, 'B1': 150}   # 'top': top edge per template
+_WM_LOW_GAP    = 150      # 'center_low': top edge this far below the caption centre
+_WM_RAIL_X     = 990      # right-rail buttons start here
+_WM_MAX_W      = 2 * (_WM_RAIL_X - 10 - _OUT_W // 2)    # centred at x 540, ends left of the rail
+_WM_MIN_W      = 240
+
+
+def watermark_path(wm):
+    """Absolute path of a watermark config's PNG (repo-relative 'file')."""
+    f = str((wm or {}).get('file') or '')
+    return f if os.path.isabs(f) else os.path.normpath(os.path.join(_REPO_DIR, f))
+
+
+def watermark_box(wm, template='B1', caption_y=None, cap=64, size=None):
+    """
+    (x0, y0, x1, y1) of the watermark on the 1080x1920 canvas. size: the
+    PNG's (w, h) (read from the file when None). Raises ValueError on a bad
+    config or when the box would leave the safe zone (never drawn cropped).
+    """
+    if size is None:
+        with Image.open(watermark_path(wm)) as im:
+            size = im.size
+    sw, sh = size
+    w = int(round(float(wm.get('width_frac') or 0.5) * _OUT_W))
+    w = max(_WM_MIN_W, min(_WM_MAX_W, w))
+    h = int(round(w * sh / sw))
+    if wm.get('y') is not None:
+        y0 = int(wm['y'])
+    else:
+        pos = wm.get('pos') or 'top'
+        if pos == 'top':
+            y0 = _WM_TOP.get(template, _WM_TOP['B1'])
+        elif pos == 'center_low':
+            cy = int(caption_y or _TEMPLATE_CAPTION_Y.get(template, 1160))
+            y0 = min(cy + _WM_LOW_GAP, _SAFE_BOTTOM - 10 - h)
+        else:
+            raise ValueError(f"watermark pos {pos!r} (use 'top' or 'center_low')")
+    x0 = (_OUT_W - w) // 2
+    box = (x0, y0, x0 + w, y0 + h)
+    if box[0] < 0 or box[1] < 0 or box[2] > _WM_RAIL_X or box[3] > _SAFE_BOTTOM:
+        raise ValueError(f"watermark box {box} leaves the safe zone (y <= {_SAFE_BOTTOM}, x <= {_WM_RAIL_X})")
+    return box
+
+
+def render_watermark_png(out_path, wm, template='B1', caption_y=None, cap=64):
+    """
+    Full-canvas transparent PNG with the brand watermark scaled (Lanczos,
+    alpha kept) into watermark_box. Returns the box. A missing file raises:
+    a brief-required watermark must never silently drop off a render.
+    """
+    path = watermark_path(wm)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"watermark file missing: {path}")
+    logo = Image.open(path).convert('RGBA')
+    box = watermark_box(wm, template, caption_y, cap, size=logo.size)
+    logo = logo.resize((box[2] - box[0], box[3] - box[1]), Image.LANCZOS)
+    layer = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
+    layer.alpha_composite(logo, (box[0], box[1]))
+    layer.save(out_path)
+    return box
+
+
 def render_card_png(text, out_path, centre_y=None, top_y=None, max_bottom=_SAFE_BOTTOM - 10):
     """Context card: black Montserrat ExtraBold on a white rounded box (radius 24)."""
     text = " ".join(text.split())
@@ -819,6 +887,13 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
             # under the caption on every template: higher up it covers the head
             render_card_png(ov['context'], p, top_y=cy + _CARD_GAP)
             pngs.append((p, min(_CARD_END, dur)))
+        # brand watermark: on every frame, composited last so no layer of ours covers it
+        wm_box = None
+        if cfg.get('watermark'):
+            p = os.path.join(work, 'watermark.png')
+            cap = _PRESETS.get(cfg.get('caption_preset'), _PRESETS['tv'])['cap']
+            wm_box = render_watermark_png(p, cfg['watermark'], template, cy, cap)
+            pngs.append((p, None))
 
         # closing line rides the tail hold; captions clear when it starts
         script_ov = {'tags': ov.get('tags') or []}
@@ -838,7 +913,8 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
               f"{cfg.get('caption_preset', 'tv')}, y {cy}" +
               (" + header" if header else "") + (" + context card" if ov.get('context') else "") +
               (" + closing line" if ov.get('closing') else "") +
-              (f" + {len(script_ov['tags'])} tag(s)" if script_ov['tags'] else ""))
+              (f" + {len(script_ov['tags'])} tag(s)" if script_ov['tags'] else "") +
+              (f" + watermark {wm_box}" if wm_box else ""))
         with open(os.path.join(work, 'captions.ass'), 'w', encoding='utf-8') as f:
             f.write(_build_ass_v2(mapped, dur, dict(cfg, caption_y=cy), script_ov))
         for name in _ASS_FONTS:
@@ -866,6 +942,7 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
         _cap_true_peak(video_path, output_path, info)
         info['allowed_boxes'] = allowed
         info['caption_y'] = cy
+        info['watermark_box'] = wm_box
         info['closing'] = script_ov.get('closing_start')
         return info
     finally:

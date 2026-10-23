@@ -197,6 +197,10 @@ def _render_config(render, story, wide_fallback=False):
         'handle_required': bool(render.get('handle_required')),
         'context_required': bool(render.get('context_required')),
         'handle_size': render.get('handle_size'),
+        # A brief-required brand watermark (logo PNG on every frame); kept through the QA re-encode.
+        'watermark': render.get('watermark') or None,
+        # The source's own graphics are content (a brand show's labels / cards): QA only warns.
+        'burned_text_ok': bool(render.get('burned_text_ok')),
         'tail_s': tail,
         'max_hold': _MAX_HOLD_A if niche == 'A' else max(tail, _MAX_HOLD_B),
         'reaction_cut': niche == 'A',
@@ -603,7 +607,7 @@ def _caption_settings(cfg, stats):
             print(f"  Captions moved to y {y} (face bottom at {face_bottom:.0f})")
     return {'template': cfg['template'], 'caption_preset': cfg['caption_preset'],
             'caption_y': y, 'names': cfg['names'], 'handle': cfg['handle'],
-            'handle_size': cfg.get('handle_size')}
+            'handle_size': cfg.get('handle_size'), 'watermark': cfg.get('watermark')}
 
 
 def _overlay_settings(story, cfg, segments, words_out):
@@ -651,9 +655,11 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
            'normalization_type': enc.get('normalization_type'),
            'render_seconds': round(seconds, 1), 'variant': story.get('variant'),
            'payoff_out': plan.get('payoff_out'), 'punches': plan.get('toggles'),
-           'allowed_boxes': enc.get('allowed_boxes')}
+           'allowed_boxes': enc.get('allowed_boxes'),
+           'watermark_box': enc.get('watermark_box')}
     if cfg:
         ctx['caption_y'] = enc.get('caption_y')
+        ctx['burned_text_ok'] = cfg.get('burned_text_ok', False)
         if cfg['template'] == 'A1':
             from reframer import A1_WINDOW
             ctx['live_rows'] = ctx['window'] = (A1_WINDOW[0], A1_WINDOW[0] + A1_WINDOW[1])
@@ -676,8 +682,10 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
                                           'context': story.get('context_line') if cfg.get('context_required')
                                           else None,
                                           'last_word_end': words_out[-1]['end'] if words_out else None})
+            # render_cfg still carries the watermark: the safe re-encode keeps the brand logo
             ctx.update(normalization_type=enc.get('normalization_type'), allowed_boxes=None,
-                       caption_y=enc.get('caption_y'), safe_rerender=True)
+                       caption_y=enc.get('caption_y'), watermark_box=enc.get('watermark_box'),
+                       safe_rerender=True)
             qa = render_qa.run(out_path, ctx)
         print(f"  QA ({time.time() - t:.0f}s): LUFS {qa.get('lufs')} TP {qa.get('true_peak')} "
               f"LRA {qa.get('lra')} | longest shot {qa.get('longest_shot')}s | tail {qa.get('tail_s')}s"
