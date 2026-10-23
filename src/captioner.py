@@ -363,7 +363,7 @@ _PRESETS = {
     # cap px, max words, max chars, lines, centre pop on entry
     'tv':        dict(cap=64, words=3, chars=14, lines=1, pop=False),
     'talk':      dict(cap=64, words=3, chars=14, lines=1, pop=True),
-    'full_subs': dict(cap=60, words=7, chars=30, lines=2, pop=False, line_chars=17),
+    'full_subs': dict(cap=62, words=7, chars=30, lines=2, pop=False, line_chars=17),
 }
 _TEMPLATE_CAPTION_Y = {'A1': 1160, 'A2': 1160, 'B1': 960}   # \an5 centre per template
 _CAP_X2       = 530       # centre x: the chunk (max 800 wide) stays left of the right rail
