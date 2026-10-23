@@ -13,7 +13,13 @@ Timings come from Whisper word-level timestamps, remapped from episode time
 into the merged video's timeline using the (frame-snapped) sub-clip list.
 
 Also renders the persistent top hook banner (render_hook_png) and does the
-final encode: two-pass loudnorm to -14 LUFS / -1.5 dBTP, stereo AAC 192k.
+final encode: peak limiter + two-pass linear loudnorm to -14 LUFS / -2 dBTP,
+stereo AAC 192k.
+
+With a render config (clipper resolves it from the profile) the template
+look is used instead: Anton captions at a measured 64 px cap height with a
+static keyword highlight, a Montserrat headline in the A1 blur band, and the
+originality layer (context card, closing line, stage directions).
 """
 import json
 import os
@@ -53,6 +59,8 @@ _CAPTION_LEAD    = 0.08   # show slightly before the word is spoken
 # TP target sits 0.5 dB under the -1.5 dBTP spec: the AAC encode overshoots
 # loudnorm's limiter slightly (measured -1.47 dBTP with TP=-1.5).
 _LOUD_I, _LOUD_TP, _LOUD_LRA = -14.0, -2.0, 11.0
+# Peak limiter ahead of loudnorm (dBFS); lowered per clip until linear mode holds.
+_LIMIT_DB = -2.05      # = alimiter limit 0.79
 _AUDIO_ARGS = ['-ac', '2', '-ar', '48000', '-c:a', 'aac', '-b:a', '192k']
 _VIDEO_ARGS = ['-c:v', 'libx264', '-preset', 'slow', '-crf', '18',
                '-pix_fmt', 'yuv420p', '-movflags', '+faststart']
@@ -328,9 +336,430 @@ def _render_emoji_glyph(emoji_str, font_path, target_px):
     return None
 
 
+# --- Template captions and overlays (render config set; see clipper) ----------
+#
+# Captions stay Anton (bundled) but are sized from the font's OS/2 metrics so
+# the measured cap height is 64 px (libass sizes the whole winAscent+winDescent
+# box to Fontsize, so Anton "104" was only a 52 px cap). Static keyword
+# highlight (at most one coloured word per chunk), centred (\an5) at a fixed
+# per-template y. Headline / context card / closing line / stage directions
+# use Montserrat (fonts/, SIL OFL 1.1, static instances of the google/fonts
+# variable font), never a system font.
+_MONT_XB   = "Montserrat-ExtraBold.ttf"
+_MONT_XBI  = "Montserrat-ExtraBoldItalic.ttf"
+_MONT_BLKI = "Montserrat-BlackItalic.ttf"
+_MONT_SB   = "Montserrat-SemiBold.ttf"
+_ASS_FONTS = (_FONT_FILE, _MONT_XBI, _MONT_BLKI)
+
+_PRESETS = {
+    # cap px, max words, max chars, lines, centre pop on entry
+    'tv':        dict(cap=64, words=3, chars=14, lines=1, pop=False),
+    'talk':      dict(cap=64, words=3, chars=14, lines=1, pop=True),
+    'full_subs': dict(cap=56, words=7, chars=30, lines=2, pop=False, line_chars=17),
+}
+_TEMPLATE_CAPTION_Y = {'A1': 1160, 'A2': 1160, 'B1': 960}   # \an5 centre per template
+_CAP_X2       = 530       # centre x: the chunk (max 800 wide) stays left of the right rail
+_CAP_MAX_W    = 800
+_CAP_MIN_FIT  = 85        # shrink-to-fit floor (\fscx %)
+_CAP_CLAMP    = (880, 1320)
+_SAFE_BOTTOM  = 1440      # nothing we draw goes below this (Shorts title / channel UI)
+_OUTLINE_V2, _SHADOW_V2 = 4, 4
+_SHADOW_V2_C  = "&H80000000&"        # 50 % black
+_YELLOW_V2    = "&H0000E6FF&"        # #FFE600
+_GREEN        = "&H006BE62E&"        # #2EE66B numbers / money
+_RED          = "&H00303BFF&"        # #FF3B30 negatives
+_CHUNK_GAP_V2, _CHUNK_HOLD_V2, _CHUNK_MIN_V2 = 0.25, 0.60, 0.25
+_CAPTION_LEAD_V2 = 0.04
+_KEYWORD_SHARE = 0.45     # at most this share of chunks carries a coloured word
+_POP_V2 = r"\fscx{a}\fscy85\t(0,67,\fscx{b}\fscy112)\t(67,133,\fscx{c}\fscy100)"
+
+_NUM_RE = re.compile(r"\d|[$%£€]|^(MILLION|BILLION|THOUSAND|HUNDRED|HOURS?|YEARS?|DOLLARS?|BUCKS)$")
+_NEG_WORDS = {"RAW", "WRONG", "FIRED", "DEAD", "NEVER", "WORST", "HATE", "STOP", "NO", "DISGUSTING",
+              "LIED", "BROKE", "DIVORCE", "DUMPED", "CHEATED", "KILL", "QUIT", "TERRIBLE", "HORRIBLE"}
+_STOPWORDS = {"A", "AN", "THE", "TO", "OF", "AND", "I", "IT", "IS", "IN", "ON", "AT", "FOR", "YOU",
+              "WE", "HE", "SHE", "THEY", "SO", "BUT", "OR", "MY", "YOUR", "HIS", "HER", "OUR",
+              "THEIR", "WITH", "THAT", "THIS", "BE", "ARE", "WAS", "AM", "IF", "AS", "BY", "FROM",
+              "I'M", "IT'S", "DON'T", "JUST", "LIKE", "UM", "UH", "OH"}
+# Names that always get the name colour (the channel's main show); profiles add
+# their own through render['names'] and stories through story['keywords'].
+_DEFAULT_NAMES = {"ROSS", "RACHEL", "MONICA", "CHANDLER", "JOEY", "PHOEBE", "GUNTHER", "JANICE"}
+
+# Headline band (A1), context card, closing line, stage directions, handle.
+_HEAD_BAND     = (90, 280)
+_HEAD_SIZE     = 64       # Pillow px (Montserrat cap height = 0.70 x size -> ~45 px)
+_HEAD_MIN      = 52
+_HEAD_MAX_W    = 1000
+_HEAD_PITCH    = 76
+_HEAD_STROKE   = 3
+_CARD_SIZE     = 56
+_CARD_MIN      = 44
+_CARD_MAX_W    = 900
+_CARD_GAP      = 110      # card top this far below the caption centre
+                          # (the eye line sits at ~y 540, so a card there covers the face)
+_CARD_END      = 2.5      # s
+_CLOSE_EM      = 60       # Montserrat ExtraBold Italic, em px (header look)
+_CLOSE_MIN_EM  = 44
+_CLOSE_MAX_W   = 900
+_CLOSE_Y       = 1065     # A templates; B1 uses the caption position
+_CLOSE_MIN_S, _CLOSE_MAX_S = 1.0, 1.5
+_TAG_CAP       = 40
+_TAG_S         = 1.0
+_TAG_ABOVE     = 95       # tag centre sits this far above the caption centre
+_HANDLE_SIZE   = 30
+_HANDLE_ALPHA  = 178      # 70 %
+_HANDLE_A1_Y   = 1700
+
+
+def _font_path(name):
+    return os.path.join(_FONT_DIR, name)
+
+
+def _font_metrics(path):
+    """(unitsPerEm, winAscent, winDescent, capHeight) read straight from the TTF tables."""
+    import struct
+    with open(path, 'rb') as f:
+        data = f.read()
+    n = struct.unpack('>H', data[4:6])[0]
+    tables = {}
+    for i in range(n):
+        tag, _, off, _ = struct.unpack('>4sIII', data[12 + 16 * i:28 + 16 * i])
+        tables[tag] = off
+    head, os2 = tables[b'head'], tables[b'OS/2']
+    upm = struct.unpack('>H', data[head + 18:head + 20])[0]
+    version = struct.unpack('>H', data[os2:os2 + 2])[0]
+    win_a, win_d = struct.unpack('>HH', data[os2 + 74:os2 + 78])
+    cap = struct.unpack('>h', data[os2 + 88:os2 + 90])[0] if version >= 2 else int(upm * 0.7)
+    return upm, win_a, win_d, cap
+
+
+def _ass_fontsize(path, cap_px):
+    """ASS Fontsize that renders a cap height of cap_px under libass."""
+    _, win_a, win_d, cap = _font_metrics(path)
+    return int(round(cap_px * (win_a + win_d) / cap))
+
+
+def _ass_em(path, fontsize):
+    """Pillow em size (px) matching an ASS Fontsize, for width measurement."""
+    upm, win_a, win_d, _ = _font_metrics(path)
+    return fontsize * upm / (win_a + win_d)
+
+
+def _bare(text):
+    return re.sub(r"[^\w$%£€']", "", text)
+
+
+_PUNCT_END = re.compile(r'[.!?,]["\')\]]*$')
+
+
+def _chunk_words_v2(mapped_words, max_words=3, max_chars=14):
+    """1-3 word chunks; breaks on .?!, , pauses > 0.25 s; never ends on a stopword;
+    chunks shown < 0.25 s merge into the next one."""
+    words = []
+    for w in mapped_words:
+        text = w['word'].strip().upper()
+        if text:
+            words.append(dict(w, text=text))
+    chunks, cur = [], []
+    for w in words:
+        if cur:
+            prev = cur[-1]
+            line = " ".join(x['text'] for x in cur + [w])
+            if (len(cur) >= max_words or len(line) > max_chars
+                    or w['start'] - prev['end'] > _CHUNK_GAP_V2
+                    or _PUNCT_END.search(prev['text'])):
+                chunks.append(cur)
+                cur = []
+        cur.append(w)
+    if cur:
+        chunks.append(cur)
+
+    # a chunk never ends on a lone article / pronoun / preposition
+    for i in range(len(chunks) - 1):
+        c, nxt = chunks[i], chunks[i + 1]
+        while (len(c) > 1 and _bare(c[-1]['text']) in _STOPWORDS
+               and not _PUNCT_END.search(c[-1]['text'])
+               and nxt[0]['start'] - c[-1]['end'] <= _CHUNK_GAP_V2
+               and len(nxt) <= max_words
+               and len(" ".join(x['text'] for x in [c[-1]] + nxt)) <= max_chars + 6):
+            nxt.insert(0, c.pop())
+
+    # minimum on-screen time: fold a too-short chunk into the next one
+    out = []
+    for i, c in enumerate(chunks):
+        if out and out[-1] is not None:
+            prev = out[-1]
+            if (c[0]['start'] - prev[0]['start'] < _CHUNK_MIN_V2
+                    and len(prev) + len(c) <= max_words + 1
+                    and not re.search(r'[.!?]["\')\]]*$', prev[-1]['text'])):
+                out[-1] = prev + c
+                continue
+        out.append(c)
+    return out
+
+
+def _wrap_two(texts, limit):
+    """Split words into <= 2 balanced lines of <= limit chars (full_subs)."""
+    line = " ".join(texts)
+    if len(line) <= limit or len(texts) < 2:
+        return [texts]
+    best = None
+    for k in range(1, len(texts)):
+        a, b = " ".join(texts[:k]), " ".join(texts[k:])
+        score = max(len(a), len(b))
+        if best is None or score < best[0]:
+            best = (score, k)
+    return [texts[:best[1]], texts[best[1]:]]
+
+
+def _keyword_pick(chunk, names, sentence_end):
+    """(index, colour, priority) of the one word to colour in this chunk, or None."""
+    words = [_bare(w['text']) for w in chunk]
+    for i, w in enumerate(words):
+        if _NUM_RE.search(w):
+            return i, _GREEN, 3
+    for i, w in enumerate(words):
+        if w in _NEG_WORDS:
+            return i, _RED, 2
+    for i, w in enumerate(words):
+        base = w[:-2] if w.endswith("'S") else w
+        if w in names or base in names:
+            return i, _YELLOW_V2, 2
+    if sentence_end and len(words) >= 2:
+        for i in range(len(words) - 1, -1, -1):
+            if words[i] not in _STOPWORDS and len(words[i]) > 2:
+                return i, _YELLOW_V2, 1
+    return None
+
+
+def _measure_chunk(text, fontsize):
+    path = _font_path(_FONT_FILE)
+    try:
+        font = ImageFont.truetype(path, max(1, int(round(_ass_em(path, fontsize)))))
+        return font.getlength(text) + len(text)          # + Spacing 1 per glyph
+    except OSError:
+        return 0
+
+
+def _closing_lines(text, path, max_w=_CLOSE_MAX_W):
+    """(em, [line1, line2?]) for the closing line: Montserrat, caps, <= 2 lines."""
+    text = " ".join(text.upper().split())
+    img = ImageDraw.Draw(Image.new('L', (8, 8)))
+    em = _CLOSE_EM
+    while True:
+        font = ImageFont.truetype(path, em)
+        lines = _wrap_lines(img, text, font, max_w)
+        if len(lines) <= 2 or em <= _CLOSE_MIN_EM:
+            return em, lines[:2]
+        em -= 4
+
+
+def _ass_escape(text):
+    return text.replace('\\', '').replace('{', '(').replace('}', ')').replace('\n', ' ')
+
+
+def _build_ass_v2(mapped, total_duration, cfg, overlays):
+    """
+    Template captions + originality overlays in one ASS script.
+
+    cfg: caption_preset, caption_y, names (upper-case set), template.
+    overlays: closing (text), closing_y, closing_start, tags [(t, text)],
+    caption_end (s; captions clear here so the closing line has the screen).
+    """
+    P = _PRESETS.get(cfg.get('caption_preset'), _PRESETS['tv'])
+    cy = int(cfg.get('caption_y', 1160))
+    fs = _ass_fontsize(_font_path(_FONT_FILE), P['cap'])
+    close_path = _font_path(_MONT_XBI)
+    tag_fs = _ass_fontsize(_font_path(_MONT_BLKI), _TAG_CAP)
+    close_em, close_lines = (_closing_lines(overlays['closing'], close_path)
+                             if overlays.get('closing') else (_CLOSE_EM, []))
+    close_fs = int(round(close_em * (lambda m: (m[1] + m[2]) / m[0])(_font_metrics(close_path))))
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {_OUT_W}
+PlayResY: {_OUT_H}
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Cap,{_FONT},{fs},{_WHITE},&H000000FF&,{_OUTLINE},{_SHADOW_V2_C},0,0,0,0,100,100,1,0,1,{_OUTLINE_V2},{_SHADOW_V2},5,0,0,0,1
+Style: Close,Montserrat ExtraBold,{close_fs},{_WHITE},&H000000FF&,{_OUTLINE},&H66000000&,0,1,0,0,100,100,0,0,1,3,4,5,0,0,0,1
+Style: Tag,Montserrat Black,{tag_fs},{_YELLOW_V2},&H000000FF&,{_OUTLINE},&H80000000&,0,1,0,0,100,100,0,0,1,3,3,5,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    events = []
+    chunks = _chunk_words_v2(mapped, P['words'], P['chars'])
+    names = cfg.get('names') or _DEFAULT_NAMES
+    picks = [_keyword_pick(c, names, bool(re.search(r'[.!?]["\')\]]*$', c[-1]['text'])))
+             for c in chunks]
+    # keep the highlight rare: drop the weakest picks above the share cap
+    limit = int(_KEYWORD_SHARE * len(chunks))
+    order = sorted((i for i, p in enumerate(picks) if p), key=lambda i: (picks[i][2], -i))
+    while sum(1 for p in picks if p) > limit and order:
+        picks[order.pop(0)] = None
+
+    starts = [max(0.0, c[0]['start'] - _CAPTION_LEAD_V2) for c in chunks]
+    if starts and starts[0] < 0.3:
+        starts[0] = 0.0
+    cap_end = min(total_duration, overlays.get('caption_end') or total_duration)
+    for ci, chunk in enumerate(chunks):
+        s = starts[ci]
+        if ci + 1 < len(chunks):
+            e = min(starts[ci + 1], chunk[-1]['end'] + _CHUNK_HOLD_V2)
+        else:
+            e = cap_end                     # the last chunk stays up (until the closing line)
+        e = min(e, cap_end) if ci + 1 == len(chunks) else e
+        if e - s < 0.04:
+            continue
+        kw = picks[ci]
+        texts = [w['text'] for w in chunk]
+        lines = _wrap_two(texts, P.get('line_chars', P['chars'])) if P['lines'] > 1 else [texts]
+        rendered, j = [], 0
+        for ln in lines:
+            parts = []
+            for t in ln:
+                parts.append((r"{\c" + kw[1] + "}" + t + r"{\c" + _WHITE + "}") if kw and j == kw[0] else t)
+                j += 1
+            rendered.append(" ".join(parts))
+        width = max(_measure_chunk(" ".join(ln), fs) for ln in lines)
+        fx = 100 if not width or width <= _CAP_MAX_W else max(_CAP_MIN_FIT, int(100 * _CAP_MAX_W / width))
+        fit = rf"\fscx{fx}" if fx < 100 else ""
+        anim = (_POP_V2.format(a=round(85 * fx / 100), b=round(112 * fx / 100), c=fx)
+                if P['pop'] else "")
+        line = rf"{{\an5\pos({_CAP_X2},{cy}){fit}{anim}}}" + r"\N".join(rendered)
+        events.append(f"Dialogue: 1,{_format_ass_time(s)},{_format_ass_time(e)},Cap,,0,0,0,,{line}")
+
+    for t, text in overlays.get('tags') or ():
+        t1 = min(total_duration, t + _TAG_S)
+        if t1 - t < 0.3:
+            continue
+        pop = _POP_V2.format(a=85, b=112, c=100)
+        events.append(f"Dialogue: 2,{_format_ass_time(t)},{_format_ass_time(t1)},Tag,,0,0,0,,"
+                      rf"{{\an5\pos(540,{cy - _TAG_ABOVE}){pop}}}" + _ass_escape(text.upper()))
+
+    if close_lines:
+        body = _ass_escape(close_lines[0])
+        if len(close_lines) > 1:
+            body += r"\N{\c" + _YELLOW_V2 + "}" + _ass_escape(close_lines[1])
+        events.append(f"Dialogue: 3,{_format_ass_time(overlays['closing_start'])},"
+                      f"{_format_ass_time(total_duration + 0.1)},Close,,0,0,0,,"
+                      rf"{{\an5\pos(540,{overlays['closing_y']})}}" + body)
+    return header + "\n".join(events) + "\n"
+
+
+def _text_layer(lines, font, colours, centre_y, pitch, stroke=_HEAD_STROKE):
+    """Transparent 1080x1920 layer: centred lines with a black stroke and a soft drop shadow."""
+    img = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
+    shadow = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
+    d, sd = ImageDraw.Draw(img), ImageDraw.Draw(shadow)
+    top = centre_y - pitch * len(lines) / 2
+    for k, (line, colour) in enumerate(zip(lines, colours)):
+        w = d.textlength(line, font=font)
+        x = (_OUT_W - w) / 2
+        y = top + pitch * k + pitch / 2
+        sd.text((x, y + 4), line, font=font, fill=(0, 0, 0, 153), anchor='lm',
+                stroke_width=stroke, stroke_fill=(0, 0, 0, 153))
+        d.text((x, y), line, font=font, fill=colour, anchor='lm',
+               stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+    return Image.alpha_composite(shadow, img)
+
+
+def _balanced_two(draw, text, font, max_w):
+    """Two lines of similar width (the A1 headline look: white line, yellow line)."""
+    words = text.split()
+    if len(words) < 3:
+        return [text]
+    best = None
+    for k in range(1, len(words)):
+        a, b = " ".join(words[:k]), " ".join(words[k:])
+        wa, wb = draw.textlength(a, font=font), draw.textlength(b, font=font)
+        if max(wa, wb) <= max_w and (best is None or abs(wa - wb) < best[0]):
+            best = (abs(wa - wb), [a, b])
+    return best[1] if best else _wrap_lines(draw, text, font, max_w)
+
+
+def render_overlay_png(out_path, template, header=None, handle=None, handle_y=None):
+    """
+    Persistent overlay layer: the A1 headline in the top blur band (Montserrat
+    ExtraBold Italic, ALL CAPS, line 1 white / line 2 #FFE600, no emoji) and the
+    optional channel handle. Returns the handle's box (x0, y0, x1, y1) or None.
+    """
+    layer = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
+    if header and template == 'A1':
+        text = " ".join(header.upper().split())
+        d = ImageDraw.Draw(layer)
+        size = _HEAD_SIZE
+        while True:
+            font = ImageFont.truetype(_font_path(_MONT_XBI), size)
+            lines = _balanced_two(d, text, font, _HEAD_MAX_W)
+            if len(lines) <= 2 or size <= _HEAD_MIN:
+                break
+            size -= 4
+        lines = lines[:2]
+        pitch = int(round(_HEAD_PITCH * size / _HEAD_SIZE))
+        cols = [(255, 255, 255, 255), (255, 230, 0, 255)][:len(lines)]
+        layer = Image.alpha_composite(layer, _text_layer(lines, font, cols, sum(_HEAD_BAND) / 2, pitch))
+    box = None
+    if handle:
+        font = ImageFont.truetype(_font_path(_MONT_SB), _HANDLE_SIZE)
+        d = ImageDraw.Draw(layer)
+        w = d.textlength(handle, font=font)
+        y = handle_y or _HANDLE_A1_Y
+        hl = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
+        ImageDraw.Draw(hl).text(((_OUT_W - w) / 2, y), handle, font=font, anchor='lm',
+                                fill=(255, 255, 255, _HANDLE_ALPHA), stroke_width=1,
+                                stroke_fill=(0, 0, 0, 90))
+        layer = Image.alpha_composite(layer, hl)
+        box = (int((_OUT_W - w) / 2) - 4, int(y - _HANDLE_SIZE), int((_OUT_W + w) / 2) + 4,
+               int(y + _HANDLE_SIZE))
+    layer.save(out_path)
+    return box
+
+
+def render_card_png(text, out_path, centre_y=None, top_y=None, max_bottom=_SAFE_BOTTOM - 10):
+    """Context card: black Montserrat ExtraBold on a white rounded box (radius 24)."""
+    text = " ".join(text.split())
+    layer = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    size = _CARD_SIZE
+    while True:
+        font = ImageFont.truetype(_font_path(_MONT_XB), size)
+        lines = _wrap_lines(d, text, font, _CARD_MAX_W - 80)
+        if len(lines) <= 2 or size <= _CARD_MIN:
+            break
+        size -= 4
+    lines = lines[:2]
+    pitch = int(size * 1.25)
+    w = max(d.textlength(ln, font=font) for ln in lines)
+    bw, bh = w + 80, pitch * len(lines) + 56 - (pitch - size)
+    y0 = top_y if top_y is not None else centre_y - bh / 2
+    y0 = min(y0, max_bottom - bh)
+    x0 = (_OUT_W - bw) / 2
+    d.rounded_rectangle([x0, y0, x0 + bw, y0 + bh], radius=24, fill=(255, 255, 255, 255))
+    for k, ln in enumerate(lines):
+        lw = d.textlength(ln, font=font)
+        d.text(((_OUT_W - lw) / 2, y0 + 28 + pitch * k + size / 2), ln, font=font,
+               fill=(17, 17, 17, 255), anchor='lm')
+    layer.save(out_path)
+    return (int(x0), int(y0), int(x0 + bw), int(y0 + bh))
+
+
 def burn_captions(video_path, output_path, all_words, story_clips,
-                   hook_text=None, hook_emoji=None):
+                   hook_text=None, hook_emoji=None, render=None, overlays=None):
+    """
+    Final encode of the Short: picture enhance, banner / template overlays,
+    captions burned last, loudness-normalised audio.
+
+    render None: today's look (white hook banner, moving-highlight captions).
+    render (resolved by clipper): template, caption_preset, caption_y, names,
+    handle; overlays: header, context, closing, tags (output seconds),
+    last_word_end. Returns {'normalization_type', 'allowed_boxes', 'closing'}.
+    """
     mapped = _remap_words(all_words, story_clips)
+    if render:
+        return _burn_v2(video_path, output_path, mapped, render, overlays or {})
 
     hook_png = None
     if hook_text:
@@ -348,13 +777,86 @@ def burn_captions(video_path, output_path, all_words, story_clips,
         else:
             print("  Captions: no words mapped" +
                   (" — hook card only" if hook_png else " — no captions"))
-        _final_encode(video_path, output_path, hook_png, mapped)
+        return _final_encode(video_path, output_path, hook_png, mapped)
     finally:
         if hook_png:
             try:
                 os.unlink(hook_png)
             except OSError:
                 pass
+
+
+def _burn_v2(video_path, output_path, mapped, cfg, ov):
+    dur = _probe_duration(video_path)
+    template = cfg.get('template', 'A1')
+    cy = int(cfg.get('caption_y', _TEMPLATE_CAPTION_Y.get(template, 1160)))
+    work = tempfile.mkdtemp(prefix='ovl_')
+    try:
+        pngs, allowed = [], []
+        handle_y = (_HANDLE_A1_Y if template == 'A1'
+                    else min(_SAFE_BOTTOM - 20, cy + _PRESETS.get(cfg.get('caption_preset'), _PRESETS['tv'])['cap'] // 2 + 40))
+        header = ov.get('header') if template == 'A1' else None
+        if header or cfg.get('handle'):
+            p = os.path.join(work, 'layer.png')
+            box = render_overlay_png(p, template, header, cfg.get('handle'), handle_y)
+            pngs.append((p, None))
+            if box and box[3] > _SAFE_BOTTOM:
+                allowed.append(box)
+        if ov.get('context'):
+            p = os.path.join(work, 'card.png')
+            # under the caption on every template: higher up it covers the head
+            render_card_png(ov['context'], p, top_y=cy + _CARD_GAP)
+            pngs.append((p, min(_CARD_END, dur)))
+
+        # closing line rides the tail hold; captions clear when it starts
+        script_ov = {'tags': ov.get('tags') or []}
+        last_end = ov.get('last_word_end') or dur        # no transcript words: hold = whole end
+        if ov.get('closing'):
+            start = max(dur - _CLOSE_MAX_S, min(last_end + 0.05, dur - _CLOSE_MIN_S))
+            if start >= last_end - 0.15:
+                start = max(start, last_end)
+                y = _CLOSE_Y if template in ('A1', 'A2') else cy
+                script_ov['caption_end'] = start
+            else:
+                # B tails are short: the closing line shares the screen with the
+                # last caption, so it sits under it (never below the safe line)
+                y = min(cy + 190, _SAFE_BOTTOM - 90)
+            script_ov.update(closing=ov['closing'], closing_start=start, closing_y=y)
+        print(f"  Captions: {len(mapped)} words, template {template}, preset "
+              f"{cfg.get('caption_preset', 'tv')}, y {cy}" +
+              (" + header" if header else "") + (" + context card" if ov.get('context') else "") +
+              (" + closing line" if ov.get('closing') else "") +
+              (f" + {len(script_ov['tags'])} tag(s)" if script_ov['tags'] else ""))
+        with open(os.path.join(work, 'captions.ass'), 'w', encoding='utf-8') as f:
+            f.write(_build_ass_v2(mapped, dur, dict(cfg, caption_y=cy), script_ov))
+        for name in _ASS_FONTS:
+            if os.path.exists(_font_path(name)):
+                shutil.copy(_font_path(name), os.path.join(work, name))
+            else:
+                print(f"  Font missing ({name}) — libass will substitute")
+
+        inputs, chains, last = ['-i', os.path.abspath(video_path)], [], 'base'
+        chains.append("[0:v]unsharp=5:5:0.6:3:3:0,eq=contrast=1.05:saturation=1.1[base]")
+        for k, (p, until) in enumerate(pngs, 1):
+            inputs += ['-i', p]
+            enable = f":enable='lt(t,{until:.2f})'" if until else ""
+            chains.append(f"[{last}][{k}:v]overlay=0:0{enable}[o{k}]")
+            last = f"o{k}"
+        chains.append(f"[{last}]ass=captions.ass:fontsdir=.[vout]")
+        af, info = _loudness_chain(video_path)
+        cmd = ['ffmpeg', '-y', *inputs, '-filter_complex', ";".join(chains),
+               '-map', '[vout]', '-map', '0:a?', *_VIDEO_ARGS, '-af', af, *_AUDIO_ARGS,
+               os.path.abspath(output_path)]
+        p = subprocess.run(cmd, capture_output=True, text=True, errors='replace', cwd=work)
+        if p.returncode != 0:
+            raise subprocess.CalledProcessError(p.returncode, cmd, p.stdout, p.stderr)
+        info['normalization_type'] = _norm_type(p.stderr)
+        info['allowed_boxes'] = allowed
+        info['caption_y'] = cy
+        info['closing'] = script_ov.get('closing_start')
+        return info
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def _probe_duration(video_path):
@@ -369,26 +871,62 @@ def _probe_duration(video_path):
         return 60.0
 
 
-def _loudnorm_filter(video_path):
-    """
-    Two-pass EBU R128 normalisation: measure first, then normalise linearly to
-    _LOUD_I LUFS / _LOUD_TP dBTP so speech dynamics are kept. Falls back to the
-    single-pass (dynamic) filter if the measurement fails or the clip is silent.
-    """
-    target = f"loudnorm=I={_LOUD_I}:TP={_LOUD_TP}:LRA={_LOUD_LRA}"
+def _measure_loudness(video_path, pre=""):
+    """loudnorm pass-1 stats of the file's audio (after the optional `pre` filter)."""
+    target = f"loudnorm=I={_LOUD_I}:TP={_LOUD_TP}:LRA={_LOUD_LRA}:print_format=json"
     p = subprocess.run(['ffmpeg', '-hide_banner', '-nostats', '-i', video_path, '-vn',
-                        '-af', f"{target}:print_format=json", '-f', 'null', '-'],
+                        '-af', (pre + "," if pre else "") + target, '-f', 'null', '-'],
                        capture_output=True, text=True, errors='replace')
     m = re.search(r'\{[^{}]*"input_i"[^{}]*\}', p.stderr)
+    st = json.loads(m.group(0))
+    if float(st['input_i']) < -70:          # silence / -inf
+        raise ValueError('silent')
+    return st
+
+
+def _norm_type(stderr):
+    m = re.search(r'"normalization_type"\s*:\s*"(\w+)"', stderr or "")
+    return m.group(1) if m else None
+
+
+def _loudness_chain(video_path):
+    """
+    Peak limiter + two-pass linear loudnorm, so speech and laugh-track dynamics
+    survive. loudnorm only runs linear when (measured TP + gain) <= target TP;
+    a raw episode is usually too peaky for that and silently fell back to the
+    dynamic (compressing) mode — test1 measured an LRA of ~2 LU. The limiter
+    shaves the few peaks that would block linear mode, lowered until the
+    measurement predicts linear (at most 3 tries).
+    Returns (filter, info) with info = limit_db and predicted mode.
+    """
     try:
-        st = json.loads(m.group(0))
-        if float(st['input_i']) < -70:          # silence / -inf
-            raise ValueError('silent')
-        return (f"{target}:measured_I={st['input_i']}:measured_TP={st['input_tp']}"
-                f":measured_LRA={st['input_lra']}:measured_thresh={st['input_thresh']}"
-                f":offset={st['target_offset']}:linear=true,aresample=48000")
+        st = _measure_loudness(video_path)
     except (AttributeError, KeyError, ValueError):
-        return f"{target},aresample=48000"
+        return f"loudnorm=I={_LOUD_I}:TP={_LOUD_TP}:LRA={_LOUD_LRA},aresample=48000", {'limit_db': None}
+    gain = _LOUD_I - float(st['input_i'])
+    limit_db = min(_LIMIT_DB, _LOUD_TP - gain - 0.5)
+    for _ in range(3):
+        pre = (f"alimiter=limit={10 ** (limit_db / 20):.4f}:attack=5:release=50:level=disabled"
+               if limit_db < 0 else "")
+        try:
+            st = _measure_loudness(video_path, pre)
+        except (AttributeError, KeyError, ValueError):
+            break
+        over = float(st['input_tp']) + (_LOUD_I - float(st['input_i'])) - _LOUD_TP
+        if over <= 0:
+            break
+        limit_db -= over + 0.2
+    lra = min(20.0, max(_LOUD_LRA, float(st['input_lra']) + 1.0))
+    ln = (f"loudnorm=I={_LOUD_I}:TP={_LOUD_TP}:LRA={lra:.1f}"
+          f":measured_I={st['input_i']}:measured_TP={st['input_tp']}"
+          f":measured_LRA={st['input_lra']}:measured_thresh={st['input_thresh']}"
+          f":offset={st['target_offset']}:linear=true:print_format=json,aresample=48000")
+    return (pre + "," if pre else "") + ln, {'limit_db': round(limit_db, 2)}
+
+
+def _loudnorm_filter(video_path):
+    """Audio filter for the final encode (legacy name; see _loudness_chain)."""
+    return _loudness_chain(video_path)[0]
 
 
 def _final_encode(video_path, output_path, hook_png, mapped):
@@ -423,14 +961,19 @@ def _final_encode(video_path, output_path, hook_png, mapped):
         else:
             filter_complex = f"[0:v]{enhance}{cap_filter}[vout]"
 
+        af, info = _loudness_chain(video_path)
         cmd = [
             'ffmpeg', '-y', *inputs,
             '-filter_complex', filter_complex,
             '-map', '[vout]', '-map', '0:a?',
             *_VIDEO_ARGS,
-            '-af', _loudnorm_filter(video_path), *_AUDIO_ARGS,
+            '-af', af, *_AUDIO_ARGS,
             output_path,
         ]
-        subprocess.run(cmd, check=True, capture_output=True, cwd=work)
+        p = subprocess.run(cmd, capture_output=True, text=True, errors='replace', cwd=work)
+        if p.returncode != 0:
+            raise subprocess.CalledProcessError(p.returncode, cmd, p.stdout, p.stderr)
+        info['normalization_type'] = _norm_type(p.stderr)
+        return info
     finally:
         shutil.rmtree(work, ignore_errors=True)
