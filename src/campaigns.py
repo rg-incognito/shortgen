@@ -48,14 +48,15 @@ def _render(niche, **overrides):
     return r
 
 
-# Length by niche: 16-25 s had the best viral rate (87%) and our own retention
-# falls past 35 s. B allows up to LONG_ARC_MAX only for one escalating story
-# whose payoff sits in the last 30%; nothing unlicensed ever goes over 60 s.
+# Length by niche: 16-25 s had the best viral rate (87%), and our own retention
+# curves (Oct 24) show stalled 26-50 s Shorts lose 25-40 points between 5 and 8 s
+# while our 15-17 s hits loop, so the target is 15-22 s with a 28 s cap. B allows up
+# to LONG_ARC_MAX only for one escalating story whose payoff sits in the last 30%.
 _FRIENDS_CAST = ['Ross', 'Rachel', 'Monica', 'Chandler', 'Joey', 'Phoebe', 'Gunther', 'Janice',
                  'Emily', 'Carol', 'Susan', 'Mike', 'Richard', 'Ursula', 'Frank']
 
-NICHE_LENGTH = {'A': {'target': (14, 25), 'max': 32}, 'B': {'target': (16, 30), 'max': 35}}
-LONG_ARC_MAX = 60.0
+NICHE_LENGTH = {'A': {'target': (15, 22), 'max': 28}, 'B': {'target': (15, 22), 'max': 28}}
+LONG_ARC_MAX = 35.0
 LONG_ARC_PAYOFF_POS = 0.70
 
 # --- milkXP (MilkPEP, a regulated milk brand) ---------------------------------
@@ -393,7 +394,7 @@ CAMPAIGNS = {
         # The brief sets no minimum and the finale is 117 s of quick bits: a complete
         # 10-12 s bit is a clip (the first run rejected every 11.5-12.6 s candidate).
         'min_seconds':     9.5,
-        'target_seconds':  (12, 25),
+        'target_seconds':  (12, 22),
         'max_seconds':     35.0,
         'playlist':        'Tony Stock: Pro Trader',
         # Skate / comedy crowd: late-evening scroll.
@@ -461,7 +462,7 @@ CAMPAIGNS = {
         'wide_fallback':   True,
         # Brief 15-60 s, aim 25-45: 20 s keeps a complete moment. Niche B caps a normal clip at
         # 35 s and lets one escalating single-speaker story run to 60 s.
-        'min_seconds':     20.0,
+        'min_seconds':     15.0,
         'max_seconds':     40.0,
         'sponsorblock':    True,
         'playlist':        'BILF Podcast Clips',
@@ -580,7 +581,7 @@ CAMPAIGNS = {
         'wide_fallback':   True,
         # Brief 15-60 s; our retention falls off past ~30 s (niche B caps a normal clip at 35 s).
         'min_seconds':     15.0,
-        'target_seconds':  (18, 30),
+        'target_seconds':  (15, 22),
         'max_seconds':     35.0,
         'playlist':        'John Cena & Jessica Biel',
         # Celebrity entertainment, US late evening (free slot: 22:00 is tonyhawk).
@@ -597,6 +598,8 @@ CAMPAIGNS = {
                                    watermark={'file': 'assets/watermarks/ladbible.png', 'width_frac': 0.5,
                                               'pos': 'top'}),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/187d5d23-22c6-4dfb-9e32-cf296a3fb0b7',
+        # Paid brand content: tick YouTube's "includes paid promotion" (user decision 2026-10-24).
+        'paid_promotion':  True,
         'required_caption': ['@ladbible'],
         'caption_footer':   'John Cena and Jessica Biel on @ladbible\n\n#JohnCena #JessicaBiel #LADbible',
         # Not misleading, not an ad, nothing NSFW, never mock the guests.
@@ -643,7 +646,7 @@ CAMPAIGNS = {
         # Brief ~15-35 s. Milk moments are short asides (the first local run's were 7-13 s), so a
         # complete 14 s beat counts (the render check allows 1 s under).
         'min_seconds':     14.0,
-        'target_seconds':  (16, 28),
+        'target_seconds':  (15, 22),
         'max_seconds':     35.0,     # niche A caps a clip at 32 s
         # The header names the challenge (the lounge, the budget, getting caught): only the
         # punchline's own words spoil it, the show's topic words are not echoes or spoilers.
@@ -678,6 +681,8 @@ CAMPAIGNS = {
         # Never comment on milkXP's videos: no first comment is stored or posted for this campaign.
         'first_comment':   False,
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/7d376c42-0d49-4dab-80e9-5c3d76d67103',
+        # Paid brand content: tick YouTube's "includes paid promotion" (user decision 2026-10-24).
+        'paid_promotion':  True,
         'required_caption': ['@milkxpofficial'],
         'caption_footer':   'From milkXP Episode 3. Full show on YouTube @milkxpofficial\n\n#milkXP #milk #challenge',
         # Caption, title, tags, header and overlays.
