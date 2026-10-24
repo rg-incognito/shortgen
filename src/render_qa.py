@@ -36,6 +36,9 @@ CAP_RANGE = (60, 68)
 QS = 2
 HARD_FAILS = ('black_bars', 'static_band', 'overlay_below_safe', 'loudness', 'burned_text_0_8',
               'watermark_missing', 'watermark_unsafe')
+# Hard fails that break the frame itself: the render gets one blurred-fill re-render,
+# and if that still fails it is never uploaded (main picks another moment or skips).
+LAYOUT_FAILS = ('black_bars', 'static_band')
 # A watermark frame counts as drawn when this share of its box differs from the clean picture
 # (the logo's glyphs, outline and shadow cover ~40-60% of the box; the enhance pass alone ~0%).
 WM_DIFF, WM_MIN_SHARE, WM_MIN_FRAMES = 40, 0.08, 0.95
@@ -270,7 +273,7 @@ def run(path, ctx=None, write=True):
     dur, _, _ = probe(path)
     qa = {'file': path.replace('\\', '/').rsplit('/', 1)[-1], 'duration': round(dur, 2),
           'template': template, 'niche': niche}
-    for k in ('normalization_type', 'render_seconds', 'variant', 'punches', 'payoff_out'):
+    for k in ('normalization_type', 'render_seconds', 'variant', 'punches', 'payoff_out', 'qa_retry', 'letterbox'):
         if ctx.get(k) is not None:
             qa[k] = ctx[k]
 

@@ -20,6 +20,12 @@ Templates (layout=, from the profile's render config; 'legacy' = the above):
   A2 / B1  full-bleed 1080x1920; the face is zoomed to ~1/4 of the canvas
       height (capped 1.35x) with the eye line near y 540
 Frames are never letterboxed with black bars.
+
+Letterboxed sources: black bars baked into the source (a 2.39:1 film inside
+16:9, a 4:3 pillarbox, an episode that letterboxes some segments) are found
+per shot from the frames the detection pass already reads (content_box) and
+cropped off before any layout, so face placement, zoom and the blurred fill
+all work on the real picture. A source without bars gets the full frame.
 """
 import os
 import subprocess
@@ -70,6 +76,23 @@ _PUSH_IN      = 0.04   # slow push-in amount over a long part (4%)
 _CUT_MAD      = 30.0
 # Cuts this close to either end of a part are treated as flash frames.
 _FLASH_FRAMES = 8
+
+# Letterbox detection, per sampled frame on the grey picture. A bar row (or
+# column) has a near-black median and almost no bright pixels (burned-in
+# subtitles inside a bar stay under _BAR_SPARSE). Per shot, a row is a bar when
+# _BAR_AGREE of the shot's lit samples agree AND its median luma is steady over
+# time (moving dark content is not); only runs touching the frame edge count.
+_BAR_LUMA = 24
+_BAR_BRIGHT = 40
+_BAR_SPARSE = 0.20             # burned subtitles / logos in a bar cover ~10-15% of their rows
+_BAR_FLAT = 2.5                # max std of a bar line's dark pixels (bars measure 0-1.3)
+_BAR_GAP = 4                   # non-bar lines bridged inside a bar (a logo's soft edge)
+_BAR_AGREE = 0.75
+_BAR_AGREE_LOOSE = 0.5         # layout fallback: crop anything that is black half the time
+_BAR_STEADY = 3.0              # max temporal std of a bar row's median luma
+_BAR_MIN = 4                   # px; thinner edges are left alone
+_BAR_MAX = 0.30                # per side, share of the dimension (more = dark content)
+_BAR_MARGIN = 2                # px also trimmed past the bar (soft / dim edge rows)
 
 # Stacked split (wide_fallback profiles): two faces each at least this large
 # relative to the bigger one, too far apart to share one crop.
@@ -145,22 +168,187 @@ def _speech_frames(pipeline, wav_path, src_fps) -> set:
     return frames
 
 
-def _sample_faces(video_path, start_f, total_frames, src_fps, tiled=False):
+def _dark_lines(px, axis):
+    """(medians, bar-like flags) of the lines of px (axis=1: rows, axis=0: columns)."""
+    med = np.median(px, axis=axis)
+    d = px.astype(np.float32)
+    m = d <= _BAR_LUMA
+    n = np.maximum(m.sum(axis=axis), 1)
+    mean = (d * m).sum(axis=axis) / n
+    std = np.sqrt(np.maximum((d * d * m).sum(axis=axis) / n - mean * mean, 0))
+    # a bar is flat black (its dark pixels barely vary); dark clothes / shadows have texture
+    flags = (med <= _BAR_LUMA) & (std <= _BAR_FLAT) & ((px > _BAR_BRIGHT).mean(axis=axis) < _BAR_SPARSE)
+    return med.astype(np.uint8), flags
+
+
+def _bar_profile(gray):
+    """(row medians, col medians, dark rows, dark cols, lit) of one grey frame."""
+    rmed, rows = _dark_lines(gray[:, ::4], 1)
+    # columns are judged inside the row bars only (a letterbox would make every
+    # column through a dark suit look like a pillarbox bar)
+    top, bot = _edge_run(rows), _edge_run(rows[::-1])
+    body = gray[top:len(rows) - bot:4] if top + bot < len(rows) * 0.8 else gray[::4]
+    cmed, cols = _dark_lines(body, 0)
+    # a fade to black / a near-black frame says nothing about bars
+    lit = (~rows).mean() > 0.4 and (~cols).mean() > 0.4
+    return rmed, cmed, rows, cols, bool(lit)
+
+
+def _edge_run(flags, gap=_BAR_GAP):
+    """Length of the run of True from the start of flags, bridging up to `gap` False
+    lines (the anti-aliased edge of a logo or subtitle drawn inside a bar)."""
+    n = miss = 0
+    if not len(flags) or not flags[0]:
+        return 0
+    for i, f in enumerate(flags):
+        if f:
+            n, miss = i + 1, 0
+        else:
+            miss += 1
+            if miss > gap:
+                break
+    return n
+
+
+def content_box(profiles, src_w, src_h, agree=_BAR_AGREE):
+    """
+    (x0, y0, x1, y1) of the real picture in source px, from _bar_profile()s of
+    one shot: letterbox / pillarbox bars that are consistent across the shot
+    are cut off. No bars (or nothing lit to judge by) -> the full frame.
+    """
+    lit = [p for p in profiles if p[4]]
+    if not lit:
+        return (0, 0, src_w, src_h)
+    sides = []
+    for med_i, dark_i, dim in ((0, 2, src_h), (1, 3, src_w)):
+        dark = np.mean([p[dark_i] for p in lit], axis=0) >= agree
+        if len(lit) > 1:
+            # a bar never changes; dark moving content does (the loose fallback skips this)
+            steady = np.std([p[med_i].astype(np.float32) for p in lit], axis=0) <= _BAR_STEADY
+            if agree >= _BAR_AGREE:
+                dark &= steady
+        b = _bar_pair(_edge_run(dark), _edge_run(dark[::-1]), dim)
+        sides.append(b + _BAR_MARGIN if b else 0)
+    top, left = sides
+    return (left, top, src_w - left, src_h - top)
+
+
+def _bar_pair(lead, trail, dim):
+    """
+    The bar size to crop from BOTH ends of one axis, or 0. Letterbox / pillarbox
+    bars come in pairs of about the same size; a dark band on one side only is
+    crushed-black picture (a shadow, a dark suit, a night sky), not a bar. The
+    larger side wins (a subtitle or logo inside a bar can shorten the other).
+    """
+    ok = lambda n: _BAR_MIN <= n <= dim * _BAR_MAX
+    if not (ok(lead) and ok(trail)) or abs(lead - trail) > max(_BAR_MIN * 2, 0.35 * max(lead, trail)):
+        return 0
+    return max(lead, trail)
+
+
+def _edges(p, src_w, src_h):
+    """One sample's own bar sizes (rows, cols) to crop from each end, 0 = none."""
+    return (_bar_pair(_edge_run(p[2]), _edge_run(p[2][::-1]), src_h),
+            _bar_pair(_edge_run(p[3]), _edge_run(p[3][::-1]), src_w))
+
+
+def _cover(b1, b2):
+    """The tighter of two boxes (crops whatever either one crops)."""
+    return (max(b1[0], b2[0]), max(b1[1], b2[1]), min(b1[2], b2[2]), min(b1[3], b2[3]))
+
+
+def shot_boxes(an, agree=_BAR_AGREE):
+    """
+    [(a, b, box)] covering an analyse_clip() result's frames: one entry per camera
+    shot (box: content_box of its samples), split further where the bars change
+    inside a shot (a source that animates its letterbox open or shut). A sample
+    in the middle of such a change takes the tighter neighbouring box.
+    """
+    src_w, src_h = an['src_w'], an['src_h']
+    full = (0, 0, src_w, src_h)
+    bars = an.get('bars') or {}
+    whole = content_box(list(bars.values()), src_w, src_h, agree)
+    out = []
+    for a, b in _shots(an['cuts'], an['total_frames']):
+        lit = [f for f in sorted(bars) if a <= f < b and bars[f][4]]
+        if len(lit) < 2:
+            out.append((a, b, whole))          # too short to judge: the part's verdict
+            continue
+        runs = []                              # consecutive samples with the same bars
+        for f in lit:
+            e = _edges(bars[f], src_w, src_h)
+            if runs and max(abs(x - y) for x, y in zip(e, runs[-1][0])) <= _BAR_MIN:
+                runs[-1][1].append(f)
+            else:
+                runs.append((e, [f]))
+        if len(runs) == 1:
+            out.append((a, b, content_box([bars[f] for f in lit], src_w, src_h, agree)))
+            continue
+        boxes = [content_box([bars[f] for f in fs], src_w, src_h, agree) if len(fs) >= 2 else None
+                 for _, fs in runs]
+        if not any(boxes):                     # bars never settle: judge the shot as a whole
+            out.append((a, b, content_box([bars[f] for f in lit], src_w, src_h, agree)))
+            continue
+        for k, bx in enumerate(boxes):
+            if bx is None:                     # a transition sample: crop like the tighter neighbour
+                near = [boxes[j] for j in (k - 1, k + 1) if 0 <= j < len(boxes) and boxes[j]]
+                boxes[k] = near[0] if len(near) == 1 else _cover(*near) if near else full
+        seg = []
+        for k, ((_, fs), bx) in enumerate(zip(runs, boxes)):
+            start = a if k == 0 else fs[0]
+            if seg and seg[-1][2] == bx:
+                continue
+            if seg:
+                seg[-1][1] = start
+            seg.append([start, b, bx])
+        out += [tuple(s) for s in seg]
+    return out
+
+
+_FACE_X = ('cx', 'x0', 'x1', 'bx')
+_FACE_Y = ('cy', 'top', 'bot', 'ey')
+
+
+def _local_faces(faces, box, src_w, src_h):
+    """Face dicts re-normalised to the content box (positions and sizes; lip etc. kept)."""
+    x0, y0, x1, y1 = box
+    if (x0, y0, x1, y1) == (0, 0, src_w, src_h):
+        return faces
+    bw, bh = (x1 - x0) / src_w, (y1 - y0) / src_h
+    ox, oy = x0 / src_w, y0 / src_h
+    out = []
+    for f in faces:
+        g = dict(f)
+        for k in _FACE_X:
+            if k in g:
+                g[k] = (g[k] - ox) / bw
+        for k in _FACE_Y:
+            if k in g:
+                g[k] = (g[k] - oy) / bh
+        g['w'] = f['w'] / bw
+        g['h'] = f['h'] / bh
+        out.append(g)
+    return out
+
+
+def _sample_faces(video_path, start_f, total_frames, src_fps, tiled=False, detect=True):
     """
     Reads every frame of the clip once.
 
-    Returns (faces, cuts):
+    Returns (faces, cuts, bars):
       faces: {clip_frame_idx: [face, ...]} sampled at _SAMPLE_FPS plus the first
              frame after every cut; face = dict(cx, cy, h, w, lip) normalised 0-1
+             to the full source frame ({} when detect=False)
       cuts:  sorted clip frame indices where a new camera shot starts
+      bars:  {clip_frame_idx: _bar_profile} on the same samples (letterbox check)
     """
     step = max(1, round(src_fps / _SAMPLE_FPS))
 
     cap = cv2.VideoCapture(video_path)
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
 
-    landmarker = _create_face_landmarker()
-    data, cuts = {}, []
+    landmarker = _create_face_landmarker() if detect else None
+    data, cuts, bars = {}, [], {}
     prev_thumb = None
     last_sample = -step
     try:
@@ -168,8 +356,8 @@ def _sample_faces(video_path, start_f, total_frames, src_fps, tiled=False):
             ret, frame = cap.read()
             if not ret:
                 break
-            thumb = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (64, 36),
-                               interpolation=cv2.INTER_AREA).astype(np.int16)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            thumb = cv2.resize(gray, (64, 36), interpolation=cv2.INTER_AREA).astype(np.int16)
             is_cut = (prev_thumb is not None
                       and float(np.mean(np.abs(thumb - prev_thumb))) > _CUT_MAD)
             prev_thumb = thumb
@@ -178,6 +366,9 @@ def _sample_faces(video_path, start_f, total_frames, src_fps, tiled=False):
             if not (is_cut or fi - last_sample >= step):
                 continue
             last_sample = fi
+            bars[fi] = _bar_profile(gray)
+            if landmarker is None:
+                continue
             rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             faces = _detect(landmarker, rgb)
             if not faces and tiled:
@@ -185,8 +376,9 @@ def _sample_faces(video_path, start_f, total_frames, src_fps, tiled=False):
             data[fi] = faces
     finally:
         cap.release()
-        landmarker.close()
-    return data, cuts
+        if landmarker is not None:
+            landmarker.close()
+    return data, cuts, bars
 
 
 def _detect(landmarker, rgb, box=None):
@@ -414,8 +606,9 @@ def _eye_rect(cx, ey, cw, ch, src_w, src_h, eye_frac, top=None):
     return x1, y1
 
 
-def analyse_clip(video_path, start_sec, end_sec, pipeline=None, wide_fallback=False):
-    """Face samples, camera cuts and (optional) speech frames for one part."""
+def analyse_clip(video_path, start_sec, end_sec, pipeline=None, wide_fallback=False, detect=True):
+    """Face samples, camera cuts, letterbox profiles and (optional) speech frames for one
+    part. detect=False skips face detection and diarization (the blurred-fill fallback)."""
     rate, src_fps = probe_fps(video_path)
     cap = cv2.VideoCapture(video_path)
     src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -425,7 +618,7 @@ def analyse_clip(video_path, start_sec, end_sec, pipeline=None, wide_fallback=Fa
     total_frames = max(1, int(round((end_sec - start_sec) * src_fps)))
 
     speech_frames: set = set()
-    if pipeline is not None:
+    if pipeline is not None and detect:
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
             wav_tmp = f.name
         try:
@@ -436,26 +629,47 @@ def analyse_clip(video_path, start_sec, end_sec, pipeline=None, wide_fallback=Fa
         finally:
             os.unlink(wav_tmp)
 
-    print('    Detecting faces, lip movement and camera cuts...')
-    frame_data, cuts = _sample_faces(video_path, start_f, total_frames, src_fps,
-                                     tiled=wide_fallback)
-    return {'video': video_path, 'rate': rate, 'fps': src_fps, 'src_w': src_w, 'src_h': src_h,
-            'start_f': start_f, 'total_frames': total_frames, 'faces': frame_data,
-            'cuts': cuts, 'speech': speech_frames, 'wide_fallback': wide_fallback}
+    print('    Detecting faces, lip movement and camera cuts...' if detect else
+          '    Detecting camera cuts and letterbox bars...')
+    frame_data, cuts, bars = _sample_faces(video_path, start_f, total_frames, src_fps,
+                                           tiled=wide_fallback, detect=detect)
+    an = {'video': video_path, 'rate': rate, 'fps': src_fps, 'src_w': src_w, 'src_h': src_h,
+          'start_f': start_f, 'total_frames': total_frames, 'faces': frame_data,
+          'cuts': cuts, 'speech': speech_frames, 'wide_fallback': wide_fallback, 'bars': bars}
+    boxed = [box for _, _, box in shot_boxes(an) if box != (0, 0, src_w, src_h)]
+    if boxed:
+        print(f'    Letterbox: bars cropped off in {len(boxed)} shot(s), picture {boxed[0]}')
+    return an
 
 
-def _plan_legacy(an, top_reserved):
-    """Today's per-frame plan: full-width crop below the banner / split / wide."""
-    src_w, src_h, total = an['src_w'], an['src_h'], an['total_frames']
+def _base_crop(src_w, src_h, aspect):
+    """(cw, ch) of the largest crop of the given aspect (w / h) inside src_w x src_h."""
+    if src_w / src_h >= aspect:
+        return src_h * aspect, float(src_h)
+    return float(src_w), src_w / aspect
+
+
+def _shot_items(an, a, b, box):
+    """(frame, faces) samples of shot [a, b) with faces in the content box's coordinates."""
+    return [(fi, _local_faces(an['faces'][fi], box, an['src_w'], an['src_h']))
+            for fi in sorted(an['faces']) if a <= fi < b]
+
+
+def _plan_legacy(an, top_reserved, boxes=None):
+    """Today's per-frame plan: full-width crop below the banner / split / wide.
+    Entries are in the shot's content-box px (boxes: shot_boxes(); None = full frame)."""
+    total = an['total_frames']
     content_h = _OUT_H - top_reserved
     aspect = _OUT_W / content_h
-    if src_w / src_h >= aspect:
-        base_ch, base_cw = float(src_h), src_h * aspect
-    else:
-        base_cw, base_ch = float(src_w), src_w / aspect
+    full = (0, 0, an['src_w'], an['src_h'])
+    boxes = boxes or [(a, b, full) for a, b in _shots(an['cuts'], total)]
     plan = [None] * total
-    for a, b in _shots(an['cuts'], total):
-        items = [(fi, an['faces'][fi]) for fi in sorted(an['faces']) if a <= fi < b]
+    first_cw = None
+    for a, b, box in boxes:
+        src_w, src_h = box[2] - box[0], box[3] - box[1]
+        base_cw, base_ch = _base_crop(src_w, src_h, aspect)
+        first_cw = first_cw or base_cw
+        items = _shot_items(an, a, b, box)
         layout = _shot_layout([f for _, f in items], an['wide_fallback'], base_cw / src_w)
         if layout == 'split':
             pairs = [p for p in (_split_pair(f, base_cw / src_w) for _, f in items) if p]
@@ -469,33 +683,36 @@ def _plan_legacy(an, top_reserved):
         else:
             track = _track_shot(items, an['speech'], an['fps'])
             for f, (cx, cy) in zip(range(a, b), _crop_path(track, a, b, src_w, src_h)):
-                plan[f] = ('crop', cx, cy)
-    return plan, base_cw, base_ch, content_h
+                plan[f] = ('crop', cx, cy, base_cw, base_ch)
+    return plan, first_cw, content_h
 
 
-def _plan_template(an, layout):
+def _plan_template(an, layout, boxes=None):
     """
     Per-frame plan for the A1 / A2 / B1 templates.
 
     Entries: ('win', cx, ey, zoom, win_y, win_h, cw, ch, top) — a face-placed
     crop of cw x ch source px (before zoom) rendered into rows win_y..win_y+win_h;
     or ('split', l, r) / ('wide',) as in the legacy plan (full-bleed only).
-    cx / ey / top in source px; ey None = no face, centre the crop.
+    cx / ey / top in the shot's content-box px (boxes: shot_boxes(); None = the
+    full frame); ey None = no face, centre the crop.
     """
-    src_w, src_h, total = an['src_w'], an['src_h'], an['total_frames']
+    total = an['total_frames']
     if layout == 'A1':
         win_y, win_h = A1_WINDOW
     else:
         win_y, win_h = 0, _OUT_H
     aspect = _OUT_W / win_h
-    if src_w / src_h >= aspect:
-        base_ch, base_cw = float(src_h), src_h * aspect
-    else:
-        base_cw, base_ch = float(src_w), src_w / aspect
+    full = (0, 0, an['src_w'], an['src_h'])
+    boxes = boxes or [(a, b, full) for a, b in _shots(an['cuts'], total)]
 
     plan = [None] * total
-    for a, b in _shots(an['cuts'], total):
-        items = [(fi, an['faces'][fi]) for fi in sorted(an['faces']) if a <= fi < b]
+    first_cw = None
+    for a, b, box in boxes:
+        src_w, src_h = box[2] - box[0], box[3] - box[1]
+        base_cw, base_ch = _base_crop(src_w, src_h, aspect)
+        first_cw = first_cw or base_cw
+        items = _shot_items(an, a, b, box)
         samples = [f for _, f in items]
 
         if layout != 'A1':
@@ -546,13 +763,14 @@ def _plan_template(an, layout):
         else:
             for f in range(a, b):
                 plan[f] = ('win', src_w / 2.0, None, 1.0, win_y, win_h, base_cw, base_ch, None)
-    return plan, base_cw, base_ch
+    return plan, first_cw
 
 
 def reframe_clip(video_path: str, start_sec: float, end_sec: float,
                  output_path: str, pipeline=None, wide_fallback: bool = False,
                  top_reserved: int = 0, zoom: float = 1.0, push_in: bool = False,
-                 layout: str = 'legacy', analysis=None, zoom_events=None, push=None):
+                 layout: str = 'legacy', analysis=None, zoom_events=None, push=None,
+                 force_wide: bool = False):
     """
     Produce a video-only 1080x1920 clip of round((end-start)*fps) frames.
 
@@ -569,19 +787,35 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
     analysis: analyse_clip() result for this part (skips a second detection pass).
     zoom_events: [(frame, zoom)] punch-in level from that frame on (replaces zoom).
     push: (start_frame, amount) ease-out push-in reaching 1+amount on the last frame.
+    force_wide: the QA layout fallback — every frame is the whole picture over
+    a blurred fill, with bars cropped by the looser _BAR_AGREE_LOOSE rule.
+
+    Every shot's letterbox / pillarbox bars are cropped off first (shot_boxes).
 
     Returns {'faces': [(t, x0, y0, x1, y1)] canvas boxes of detected faces,
-    'crop_w': source width of the unzoomed crop}.
+    'crop_w': source width of the unzoomed crop, 'letterbox': [[t0, t1, x0, y0,
+    x1, y1]] shots (part seconds) whose bars were cropped}.
     """
-    an = analysis or analyse_clip(video_path, start_sec, end_sec, pipeline, wide_fallback)
-    rate, src_w, src_h = an['rate'], an['src_w'], an['src_h']
+    an = analysis or analyse_clip(video_path, start_sec, end_sec, pipeline, wide_fallback,
+                                  detect=not force_wide)
+    rate, full_w, full_h = an['rate'], an['src_w'], an['src_h']
     start_f, total_frames, cuts = an['start_f'], an['total_frames'], an['cuts']
+    boxes = shot_boxes(an, _BAR_AGREE_LOOSE if force_wide else _BAR_AGREE)
+    frame_box = [None] * total_frames
+    for a, b, box in boxes:
+        frame_box[a:b] = [box] * (b - a)
+    letterbox = [[round(a / an['fps'], 2), round(b / an['fps'], 2), *box] for a, b, box in boxes
+                 if box != (0, 0, full_w, full_h)]
 
-    if layout in ('A1', 'A2', 'B1'):
-        plan, base_cw, base_ch = _plan_template(an, layout)
+    if force_wide:
+        plan, base_cw = [('wide',)] * total_frames, None
+        top_reserved = top_reserved if layout not in ('A1', 'A2', 'B1') else 0
+        content_h = _OUT_H - top_reserved
+    elif layout in ('A1', 'A2', 'B1'):
+        plan, base_cw = _plan_template(an, layout, boxes)
         top_reserved, content_h = 0, _OUT_H
     else:
-        plan, base_cw, base_ch, content_h = _plan_legacy(an, top_reserved)
+        plan, base_cw, content_h = _plan_legacy(an, top_reserved, boxes)
     n_split = sum(1 for p in plan if p and p[0] == 'split')
     n_wide = sum(1 for p in plan if p and p[0] == 'wide')
     if cuts or n_split or n_wide:
@@ -637,9 +871,13 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
             pr = (fi - push[0]) / max(1, total_frames - 1 - push[0])
             z *= 1.0 + push[1] * (1.0 - (1.0 - pr) ** 3)
         p = plan[src_idx[fi]]
+        box = frame_box[src_idx[fi]] or (0, 0, full_w, full_h)
+        # the plan is in content-box px: drop the shot's letterbox bars first
+        pic = frame if box == (0, 0, full_w, full_h) else frame[box[1]:box[3], box[0]:box[2]]
+        src_w, src_h = box[2] - box[0], box[3] - box[1]
         rect = None                      # (x1, y1, cw, ch, out_y, out_h) of a single crop
         if p[0] == 'wide':
-            canvas[top_reserved:] = _blur_fill(frame, _OUT_W, content_h)
+            canvas[top_reserved:] = _blur_fill(pic, _OUT_W, content_h)
         elif p[0] == 'split':
             panels = []
             for face in (p[1], p[2]):
@@ -649,14 +887,14 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
                 cw = ch * _OUT_W / panel_h
                 if cw > src_w:
                     cw, ch = float(src_w), src_w * panel_h / _OUT_W
-                panels.append(_face_crop(frame, face['cx'] * src_w, face['cy'] * src_h,
+                panels.append(_face_crop(pic, face['cx'] * src_w, face['cy'] * src_h,
                                          cw, ch, src_w, src_h, _OUT_W, panel_h))
             content = np.vstack(panels + ([panels[-1][-1:]] * (content_h - 2 * panel_h)))
             content[panel_h - 2:panel_h + 2] = 0     # thin seam between the faces
             canvas[top_reserved:] = content
         elif p[0] == 'crop':
-            cw, ch = base_cw / z, base_ch / z
-            canvas[top_reserved:] = _face_crop(frame, p[1], p[2], cw, ch, src_w, src_h,
+            cw, ch = p[3] / z, p[4] / z
+            canvas[top_reserved:] = _face_crop(pic, p[1], p[2], cw, ch, src_w, src_h,
                                                _OUT_W, content_h)
             rect = (max(0.0, min(p[1] - cw / 2, src_w - cw)),
                     max(0.0, min(p[2] - ch * 0.42, src_h - ch)), cw, ch, top_reserved, content_h)
@@ -671,15 +909,16 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
                                    _A1_EYE if layout == 'A1' else _FB_EYE, top)
             rect = (x1, y1, cw, ch, wy, wh)
             if layout == 'A1':
-                canvas[:] = _bg_cover(frame)
-                canvas[wy:wy + wh] = _warp(frame, x1, y1, cw, ch, _OUT_W, wh)
+                canvas[:] = _bg_cover(pic)
+                canvas[wy:wy + wh] = _warp(pic, x1, y1, cw, ch, _OUT_W, wh)
             else:
-                canvas[:] = _warp(frame, x1, y1, cw, ch, _OUT_W, _OUT_H)
+                canvas[:] = _warp(pic, x1, y1, cw, ch, _OUT_W, _OUT_H)
         proc.stdin.write(canvas.tobytes())
 
         # canvas boxes of the faces sampled on this frame (caption placement)
         faces = an['faces'].get(src_idx[fi]) if rect else None
         if faces:
+            faces = _local_faces(faces, box, full_w, full_h)
             x1, y1, cw, ch, oy, oh = rect
             sx, sy = _OUT_W / cw, oh / ch
             for f in faces:
@@ -698,4 +937,4 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
     proc.wait()
     if proc.returncode != 0:
         raise RuntimeError(f'reframe_clip ffmpeg failed for {output_path}')
-    return {'faces': face_boxes, 'crop_w': base_cw}
+    return {'faces': face_boxes, 'crop_w': base_cw, 'letterbox': letterbox}
