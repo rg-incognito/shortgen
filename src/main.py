@@ -90,9 +90,12 @@ BURNED_TEXT_MAX_S  = 1.0    # ...and no more than this much of it anywhere
 BURNED_TEXT_SOFT_ATTEMPT = 3   # from this attempt on, text outside the hook window only warns
 
 
-# A render whose QA still finds burned-in text in 0-8 s: pick another moment this many
-# times (each retry is a full render, so keep it small; the pre-pick scan makes it rare).
+# A render whose QA still finds burned-in text in 0-8 s, or whose frame is broken (black
+# bars / static band) even after the render's blurred-fill retry: pick another moment
+# this many times (each retry is a full render, so keep it small).
 MAX_RESELECT = 1
+# QA hard fails that break the frame (render_qa.LAYOUT_FAILS). Such a render is never uploaded.
+LAYOUT_FAILS = ('black_bars', 'static_band')
 
 
 def _burned_text_problems(story, video_path, attempt=1, profile=None):
@@ -580,6 +583,11 @@ def _qa_burned_text(qa):
     return any(str(f).startswith('burned_text') for f in (qa or {}).get('hard_fail') or [])
 
 
+def _qa_layout_broken(qa):
+    """The render QA's layout-breaking hard fails (black bars, static band) — never uploaded."""
+    return [str(f) for f in (qa or {}).get('hard_fail') or [] if str(f).split(':')[0] in LAYOUT_FAILS]
+
+
 def _print_story(story):
     total_sec = story.get('_edited_seconds', story.get('_total_seconds', 0))
     print(f"      Story: [{story['score']}/10] ({story.get('format', 'story_recap')}) {story['storyline_title']}  (~{total_sec:.0f}s total)")
@@ -606,12 +614,20 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
     """
     Pick the best moment, assign its experiment arm and render it: (story,
     short_path, qa). When the render QA still finds burned-in source text in
-    the hook window, that moment is set aside and the next one is picked (up
-    to MAX_RESELECT times); other QA hard fails are retried inside the render.
-    Raises WeakMomentSkip (score gate, or every pick had burned-in text).
+    the hook window, or a broken frame (black bars / static band) that the
+    render's one blurred-fill retry did not fix, that moment is set aside and
+    the next one is picked (up to MAX_RESELECT times); other QA hard fails are
+    retried inside the render and upload with a warning.
+
+    CI cost bound per run: at most MAX_RESELECT + 1 (= 2) full renders plus ONE
+    QA retry in total (the safe caption re-encode, or the layout re-render that
+    reuses the face analysis); qa_retry=False tells later renders it is spent.
+    Raises WeakMomentSkip (score gate, or every pick failed the render QA).
     """
     in_campaign = lambda ep: episode_campaign(ep) == campaign
-    rejected = []   # segments of renders that showed burned-in text
+    rejected = []   # segments of renders that showed burned-in text or a broken frame
+    qa_retry = True  # the run's one QA retry (see the docstring) is still available
+    reasons = []
     hints = moment_hints(profile, episode_name)
     # Briefs that want several kinds of clips: ask for all of them, prefer this run's kind.
     want_type = clip_type_for_run(profile, run)
@@ -648,7 +664,7 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
         story['variant'] = variant
         apply_variant(story, variant)
         render = dict(render, template=variant['template'])
-        render_kwargs = _render_kwargs(render)
+        render_kwargs = dict(_render_kwargs(render), **_accepted(create_story_short, qa_retry=qa_retry))
         if render_kwargs and variant['template'] == 'A1':
             story['hook_emoji'] = ''   # the A1 header carries no emoji
         print(f"      Variant: {variant} experiments={story['_experiments'] or 'none'}"
@@ -667,7 +683,10 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
         qa = _read_qa(short_path)
         if qa:
             print(f"      Render QA: {_qa_fields(qa)}")
-        if not _qa_burned_text(qa):
+        if (qa or {}).get('qa_retry'):
+            qa_retry = False
+        broken = _qa_layout_broken(qa)
+        if not _qa_burned_text(qa) and not broken:
             other = [f for f in (qa or {}).get('hard_fail') or []]
             if other:
                 # Uploaded anyway while QA is new (a false positive must not stop uploads).
@@ -675,10 +694,19 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
                       f"uploads with QA hard fails: {'; '.join(map(str, other))}")
             return story, short_path, qa
         rejected += [(c['start_seconds'], c['end_seconds']) for c in story['clips']]
-        print(f"      Render QA found burned-in text in '{story['storyline_title']}' — "
-              f"picking another moment ({round_ + 1}/{MAX_RESELECT})")
-    skip = WeakMomentSkip(f"every pick ({MAX_RESELECT + 1}) showed burned-in text in the render QA")
-    skip.segments, skip.score, skip.kind = rejected, story['score'], 'render QA burned text'
+        why = 'burned-in text' if _qa_burned_text(qa) else f"a broken frame ({'; '.join(broken)})"
+        reasons.append('burned text' if _qa_burned_text(qa) else 'layout')
+        print(f"::warning title=Render QA::{episode_name} '{story['storyline_title']}' NOT uploaded: "
+              f"render QA found {why}")
+        if round_ < MAX_RESELECT:
+            print(f"      Picking another moment ({round_ + 1}/{MAX_RESELECT})")
+    what = ('showed burned-in text' if set(reasons) == {'burned text'} else
+            'had a broken frame (black bars / static band)' if set(reasons) == {'layout'} else
+            'failed the render QA (burned-in text or a broken frame)')
+    skip = WeakMomentSkip(f"every pick ({MAX_RESELECT + 1}) {what} in the render QA")
+    skip.segments, skip.score = rejected, story['score']
+    skip.kind = ('render QA burned text' if set(reasons) == {'burned text'} else
+                 'render QA layout' if set(reasons) == {'layout'} else 'render QA')
     raise skip
 
 

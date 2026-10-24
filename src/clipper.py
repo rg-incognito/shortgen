@@ -404,7 +404,7 @@ def _music_bed(audio_wav, cfg):
 
 def create_story_short(video_path, story, output_dir, episode_name,
                         pipeline=None, all_words=None, silence_thresh=_SILENCE_THRESH,
-                        wide_fallback=False, render=None):
+                        wide_fallback=False, render=None, qa_retry=True):
     """
     Cuts every clip in a story arc, reframes each to 9:16, concatenates into
     one compiled video, then burns viral-style captions plus the persistent
@@ -420,6 +420,12 @@ def create_story_short(video_path, story, output_dir, episode_name,
     layer from story['header'|'context_line'|'closing_line'|'annotations'],
     niche tail hold with a reaction cut, the 4 s shot cap and a payoff push.
     Every render gets a QA lint written to <out>.qa.json.
+
+    qa_retry: whether this render may spend the run's one QA retry: the safe
+    re-encode (overlay / loudness fails) or, for a layout-breaking fail (black
+    bars, static band), one re-render of every part as the whole bar-cropped
+    picture over a blurred fill. main passes False once a run has used it.
+    <out>.qa.json records which retry ran ('qa_retry').
     """
     from reframer import reframe_clip, analyse_clip, probe_fps, HOOK_BAR_HEIGHT, A1_WINDOW
     from captioner import burn_captions, _remap_words
@@ -505,8 +511,27 @@ def create_story_short(video_path, story, output_dir, episode_name,
             ov = _overlay_settings(story, cfg, expanded_clips, words_out)
             enc = burn_captions(merged_path, out_path, all_words or [], expanded_clips,
                                 render=render_cfg, overlays=ov)
+        def layout_fallback():
+            """Re-render every part as the whole picture (bars cropped, looser rule) over a
+            blurred fill, re-merge and burn with the same settings. No face pass is re-run."""
+            for k, (i, j, sc_start, sc_end) in enumerate(jobs):
+                reframe_clip(video_path, sc_start, sc_end, part_paths[k], wide_fallback=wide_fallback,
+                             top_reserved=top_reserved, layout=cfg['template'] if cfg else 'legacy',
+                             analysis=plan['analyses'][k] if plan.get('analyses') else None,
+                             force_wide=True)
+            _merge_clips(part_paths, merged_path, audio_path)
+            if cfg is None:
+                return burn_captions(merged_path, out_path, all_words or [], expanded_clips,
+                                     hook_text=story.get('hook_text'), hook_emoji=story.get('hook_emoji'))
+            return burn_captions(merged_path, out_path, all_words or [], expanded_clips,
+                                 render=render_cfg, overlays=ov)
+
+        letterbox = [lb for st in stats for lb in (st or {}).get('letterbox') or []]
+        if letterbox:
+            print(f"  Letterbox bars cropped in {len(letterbox)} shot(s)")
         _run_qa(out_path, merged_path, cfg, story, all_words, expanded_clips, jobs, enc or {},
-                plan, time.time() - t_start, burn_captions, render_cfg if cfg else None)
+                plan, time.time() - t_start, burn_captions, render_cfg if cfg else None,
+                layout_fallback=layout_fallback, retry=qa_retry, letterbox=letterbox)
         return out_path
 
     finally:
@@ -635,8 +660,14 @@ def _overlay_settings(story, cfg, segments, words_out):
 
 
 def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, plan,
-            seconds, burn_captions, render_cfg=None):
-    """Lint the finished Short (<out>.qa.json); one safe re-encode for fixable failures."""
+            seconds, burn_captions, render_cfg=None, layout_fallback=None, retry=True, letterbox=None):
+    """
+    Lint the finished Short (<out>.qa.json), then at most ONE retry (retry=False: none):
+      - a layout-breaking fail (render_qa.LAYOUT_FAILS: black bars, static band) re-renders
+        every part through layout_fallback() (whole picture over a blurred fill) and re-lints;
+      - otherwise an overlay / loudness fail gets the safe re-encode without overlays.
+    A layout fail that survives stays in hard_fail: main never uploads that render.
+    """
     try:
         import render_qa
         from captioner import _remap_words
@@ -656,7 +687,8 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
            'render_seconds': round(seconds, 1), 'variant': story.get('variant'),
            'payoff_out': plan.get('payoff_out'), 'punches': plan.get('toggles'),
            'allowed_boxes': enc.get('allowed_boxes'),
-           'watermark_box': enc.get('watermark_box')}
+           'watermark_box': enc.get('watermark_box'),
+           'letterbox': letterbox or None}
     if cfg:
         ctx['caption_y'] = enc.get('caption_y')
         ctx['burned_text_ok'] = cfg.get('burned_text_ok', False)
@@ -668,8 +700,18 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
     try:
         t = time.time()
         qa = render_qa.run(out_path, ctx)
+        layout = [f for f in qa['hard_fail'] if f.split(':')[0] in render_qa.LAYOUT_FAILS]
         fixable = [f for f in qa['hard_fail'] if f.split(':')[0] in ('overlay_below_safe', 'loudness')]
-        if cfg and fixable:
+        if (layout or (cfg and fixable)) and not retry:
+            print(f"  QA failed ({'; '.join(layout + fixable)}) — this run's QA retry is used up, no re-render")
+        elif layout and layout_fallback is not None:
+            print(f"  QA failed ({'; '.join(layout)}) — re-rendering as the whole picture over a blurred fill")
+            enc = layout_fallback() or {}
+            ctx.update(normalization_type=enc.get('normalization_type'), allowed_boxes=enc.get('allowed_boxes'),
+                       caption_y=enc.get('caption_y') if cfg else None, watermark_box=enc.get('watermark_box'),
+                       qa_retry='layout_fallback')
+            qa = render_qa.run(out_path, ctx)
+        elif cfg and fixable:
             print(f"  QA failed ({'; '.join(fixable)}) — re-encoding without overlays")
             enc = burn_captions(merged_path, out_path, all_words or [], segments,
                                 render=dict(render_cfg or {},
@@ -685,7 +727,7 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
             # render_cfg still carries the watermark: the safe re-encode keeps the brand logo
             ctx.update(normalization_type=enc.get('normalization_type'), allowed_boxes=None,
                        caption_y=enc.get('caption_y'), watermark_box=enc.get('watermark_box'),
-                       safe_rerender=True)
+                       safe_rerender=True, qa_retry='safe_reencode')
             qa = render_qa.run(out_path, ctx)
         print(f"  QA ({time.time() - t:.0f}s): LUFS {qa.get('lufs')} TP {qa.get('true_peak')} "
               f"LRA {qa.get('lra')} | longest shot {qa.get('longest_shot')}s | tail {qa.get('tail_s')}s"
