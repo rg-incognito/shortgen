@@ -4,11 +4,13 @@ import time
 import requests
 
 _GEMINI_BASE    = 'https://generativelanguage.googleapis.com/v1/models/{}:generateContent'
-_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash']
+# gemini-2.0-flash was retired (404 on v1): the last step retries flash-lite, the model
+# runs actually succeed on after a 2.5-flash 429, once more after the back-off.
+_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash-lite']
 
 
 def _gemini_post(payload, api_key, timeout=120):
-    """POST to Gemini with automatic model fallback on 503/429."""
+    """POST to Gemini with automatic model fallback on 503/429 (and 404: a retired model)."""
     for i, model in enumerate(_FALLBACK_MODELS):
         try:
             resp = requests.post(
@@ -23,7 +25,7 @@ def _gemini_post(payload, api_key, timeout=120):
                 print(f"  Success with fallback model: {model}")
             return resp.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         except requests.HTTPError as e:
-            if e.response.status_code in (503, 429) and i < len(_FALLBACK_MODELS) - 1:
+            if e.response.status_code in (503, 429, 404) and i < len(_FALLBACK_MODELS) - 1:
                 print(f"  {model} returned {e.response.status_code}, trying {_FALLBACK_MODELS[i+1]}")
                 time.sleep(5)
             else:
