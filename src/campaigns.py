@@ -293,6 +293,8 @@ CAMPAIGNS = {
         'source':       'release',
         'release_tag':  'footage-hardscope',
         'files': [
+            # Newest episode first: its Whop campaign has the fresh budget.
+            ('unpacked_e03', 'HS_UNPACKED_E03'),  # David Dobrik (brand Drive file, re-encoded to 720p)
             ('DSmfWU_0Gf0', 'HS_UNPACKED_E01'),   # Steve Aoki Hunts For The World's Rarest Trading Cards
             ('h7XBn5JnZ3s', 'HS_UNPACKED_E02'),   # YourRAGE Spends $15,000 Opening Rare Trading Cards
         ],
@@ -306,15 +308,16 @@ CAMPAIGNS = {
         'playlist':        'Unpacked',
         # Collectibles, younger male audience: late evening.
         'publish_slots_et': ['21:00'],
-        'title_names':     ['Unpacked', 'MatCrackz', 'Steve Aoki', 'YourRAGE', 'HardScope'],
+        'title_names':     ['Unpacked', 'MatCrackz', 'Steve Aoki', 'YourRAGE', 'David Dobrik', 'HardScope'],
         'genre':           'talk',
         'min_rubric':      8,       # no on-screen text: 8 of the 12 reachable points
-        'render':          _render('B', names=['MatCrackz', 'Aoki', 'YourRAGE']),
+        'render':          _render('B', names=['MatCrackz', 'Aoki', 'YourRAGE', 'Dobrik']),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/c85645f1-b75f-49e2-91d5-988cf9b3fadb',
         # Each episode is its own Whop campaign; submitting to the wrong one is a ban.
         'whop_campaigns': {
             'HS_UNPACKED_E01': 'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/c85645f1-b75f-49e2-91d5-988cf9b3fadb',
             'HS_UNPACKED_E02': 'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/58795e60-259f-4f9d-932c-87cf1aac7c8d',
+            'HS_UNPACKED_E03': 'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/db7f38ed-20ee-40aa-aa7c-658592ddcbf1',
         },
         'required_caption': ['#unpacked', '@HardScopeTV'],
         'caption_footer':   'Watch the full episode of Unpacked on @HardScopeTV\n\n#unpacked #MatCrackz #tradingcards',
