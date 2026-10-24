@@ -14,8 +14,13 @@ How the Whop Content Rewards setup works, what runs on its own, and what needs a
 
 | Campaign | Publish (ET) | UK time | Why | GitHub cron (UTC, ~3h early) | Local fallback (IST) |
 |---|---|---|---|---|---|
+| MilkXP Ep. 3 | 19:45 | 00:45 | US evening; strongest early views (782 in 3 h on the first Short) | `45 20 * * *` | none |
 | Mark Manson | 20:00 | 01:00 | US evening (self-improvement wind-down; US-evening slots seed a T1 audience) | `0 21 * * *` | none |
-| BILF Podcast | 20:30 | 01:30 | US evening; career/founder audience | `30 21 * * *` | none |
+| Unpacked (Ep. 3, David Dobrik first) | 21:00 | 02:00 | US evening; fresh Ep. 3 YouTube budget | `0 22 * * *` | none |
+| LADbible (John Cena & Jessica Biel) | 22:30 | 03:30 | US late evening; $5K budget, A-list | `30 23 * * *` | none |
+
+BILF Podcast (20:30 ET) is built but on standby: its first Short got 14 views in 2 h and its brief needs 1%
+engagement plus a comment per 1K views. Tony Hawk FINALE (22:00 ET) runs by hand only (117 s of footage).
 
 Only the 22:30-04:30 UTC (US evening) window is allowed; `src/campaigns.py` enforces it. Since 2026-10-24 there is no
 "min payout reachable at 1K views" rule: campaigns are picked for viral potential. Ramp Tony Hawk FINALE (`tonyhawk`,
