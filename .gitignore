@@ -17,3 +17,9 @@ analytics_summary.txt
 *.mkv
 logs/
 footage_hs/
+
+# Remotion caption layer (remotion/): pinned manifests are committed, installs are not
+!remotion/package.json
+!remotion/package-lock.json
+remotion/node_modules/
+remotion/out/

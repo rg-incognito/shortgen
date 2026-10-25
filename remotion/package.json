@@ -1,0 +1,19 @@
+{
+  "name": "shortgen-captions",
+  "private": true,
+  "description": "Remotion caption overlay for shortGen: a transparent PNG sequence that src/captioner.py composites with ffmpeg",
+  "license": "UNLICENSED",
+  "scripts": {
+    "studio": "remotion studio src/index.jsx --public-dir=../fonts",
+    "browser": "remotion browser ensure"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.532",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.532"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

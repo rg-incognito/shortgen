@@ -64,6 +64,10 @@ _PUSH_MIN_S = 1.0
 _LOOP_SEAM = 0.30
 _SEAM_GUARD = 0.15
 _SEAM_MIN = 0.12
+# Captions engine: 'ass' (libass, the default) or 'remotion' (remotion/, animated word pops;
+# falls back to ASS on any problem). A profile may set render['captions_engine'] to a
+# {slot 'HH:MM' ET: engine, '*': engine} dict, so one daily slot is the A/B arm.
+_CAPTIONS_ENGINES = ('ass', 'remotion')
 
 _SENTENCE_END = re.compile(r'[.!?]["\')\]]*$')
 
@@ -219,7 +223,37 @@ def _render_config(render, story, wide_fallback=False):
         'names': names or None,
         # end-to-start dissolve for the replay (on unless a profile sets loop_seam False)
         'loop_seam': bool(render.get('loop_seam', True)),
+        'captions_engine': captions_engine(render.get('captions_engine')),
     }
+
+
+def _run_slot():
+    """This run's publish slot ('HH:MM' ET) or None: PUBLISH_SLOT (cron / run_local --slot),
+    else the slot the CAMPAIGN's next publish serves (read only; main does the scheduling)."""
+    slot = os.environ.get('PUBLISH_SLOT', '').strip()
+    if slot:
+        return slot
+    try:
+        import campaigns
+        _, prof = campaigns.get_campaign(os.environ.get('CAMPAIGN'))
+        nominal = campaigns.publish_plan(prof)[1]
+        if not nominal:
+            return None
+        import datetime
+        t = datetime.datetime.strptime(nominal, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc)
+        return t.astimezone(campaigns._ET).strftime('%H:%M')
+    except Exception:
+        return None
+
+
+def captions_engine(setting, slot=None):
+    """'ass' | 'remotion' for this render. setting: an engine name, or a per-slot dict
+    ({'23:15': 'remotion', '*': 'ass'}; a slot not listed gets '*', else 'ass')."""
+    if isinstance(setting, dict):
+        slot = slot or _run_slot()
+        setting = setting.get(slot) if slot in setting else setting.get('*')
+    setting = str(setting or 'ass').strip().lower()
+    return setting if setting in _CAPTIONS_ENGINES else 'ass'
 
 
 def _loop_seam(cfg, words_out, total):
@@ -660,7 +694,8 @@ def _caption_settings(cfg, stats):
             print(f"  Captions moved to y {y} (face bottom at {face_bottom:.0f})")
     return {'template': cfg['template'], 'caption_preset': cfg['caption_preset'],
             'caption_y': y, 'names': cfg['names'], 'handle': cfg['handle'],
-            'handle_size': cfg.get('handle_size'), 'watermark': cfg.get('watermark')}
+            'handle_size': cfg.get('handle_size'), 'watermark': cfg.get('watermark'),
+            'captions_engine': cfg.get('captions_engine', 'ass')}
 
 
 def _overlay_settings(story, cfg, segments, words_out):
@@ -717,7 +752,8 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
            'allowed_boxes': enc.get('allowed_boxes'),
            'watermark_box': enc.get('watermark_box'),
            'letterbox': letterbox or None,
-           'loop_seam': plan.get('loop_seam')}
+           'loop_seam': plan.get('loop_seam'),
+           'captions_engine': enc.get('captions_engine'), 'remotion_fallback': enc.get('remotion_fallback')}
     if cfg:
         ctx['caption_y'] = enc.get('caption_y')
         ctx['burned_text_ok'] = cfg.get('burned_text_ok', False)
@@ -738,7 +774,7 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
             enc = layout_fallback() or {}
             ctx.update(normalization_type=enc.get('normalization_type'), allowed_boxes=enc.get('allowed_boxes'),
                        caption_y=enc.get('caption_y') if cfg else None, watermark_box=enc.get('watermark_box'),
-                       qa_retry='layout_fallback')
+                       captions_engine=enc.get('captions_engine'), qa_retry='layout_fallback')
             qa = render_qa.run(out_path, ctx)
         elif cfg and fixable:
             print(f"  QA failed ({'; '.join(fixable)}) — re-encoding without overlays")
@@ -757,7 +793,8 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
             # render_cfg still carries the watermark: the safe re-encode keeps the brand logo
             ctx.update(normalization_type=enc.get('normalization_type'), allowed_boxes=None,
                        caption_y=enc.get('caption_y'), watermark_box=enc.get('watermark_box'),
-                       safe_rerender=True, qa_retry='safe_reencode')
+                       captions_engine=enc.get('captions_engine'), safe_rerender=True,
+                       qa_retry='safe_reencode')
             qa = render_qa.run(out_path, ctx)
         print(f"  QA ({time.time() - t:.0f}s): LUFS {qa.get('lufs')} TP {qa.get('true_peak')} "
               f"LRA {qa.get('lra')} | longest shot {qa.get('longest_shot')}s | tail {qa.get('tail_s')}s"

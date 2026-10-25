@@ -40,6 +40,8 @@ _RENDER_DEFAULTS = {
 
 
 def _render(niche, **overrides):
+    # captions_engine: 'ass' (default) | 'remotion', or {slot 'HH:MM' ET: engine, '*': engine}
+    # for a per-slot A/B (clipper.captions_engine). Remotion draws the captions only.
     r = dict(_RENDER_DEFAULTS[niche])
     r.update({'allow_music': False, 'music_mode': 'off',
               'allow_sfx': False, 'sfx': {'payoff_boom': False, 'time_jump_flash': False},
@@ -597,7 +599,10 @@ CAMPAIGNS = {
                                    # Required on every frame, clear and uncropped: top of the frame,
                                    # above the faces, away from captions and the Shorts UI.
                                    watermark={'file': 'assets/watermarks/ladbible.png', 'width_frac': 0.5,
-                                              'pos': 'top'}),
+                                              'pos': 'top'},
+                                   # A/B (2026-10-25): the 23:15 slot gets the Remotion captions (word
+                                   # pops, captions only, no added text); 22:30 keeps ASS as the control.
+                                   captions_engine={'23:15': 'remotion', '*': 'ass'}),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/187d5d23-22c6-4dfb-9e32-cf296a3fb0b7',
         # Paid brand content: tick YouTube's "includes paid promotion" (user decision 2026-10-24).
         'paid_promotion':  True,
@@ -671,7 +676,9 @@ CAMPAIGNS = {
         # they are the brand's content, so burned-in text only warns (burned_text_ok).
         'render':          _render('A', names=list(_MILKXP_CAST), burned_text_ok=True,
                                    watermark={'file': 'assets/watermarks/milkxp.png', 'width_frac': 0.62,
-                                              'pos': 'top'}),
+                                              'pos': 'top'},
+                                   # A/B (2026-10-25): 18:45 Remotion captions, 19:45 ASS control.
+                                   captions_engine={'18:45': 'remotion', '*': 'ass'}),
         # The brief asks for two kinds of clips: runs alternate which one is wanted (the analyzer
         # is asked for both; the run's type wins when one of those passes every rule).
         'clip_types': {
