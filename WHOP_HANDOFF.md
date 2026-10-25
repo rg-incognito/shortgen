@@ -14,10 +14,13 @@ How the Whop Content Rewards setup works, what runs on its own, and what needs a
 
 | Campaign | Publish (ET) | UK time | Why | GitHub cron (UTC, ~3h early) | Local fallback (IST) |
 |---|---|---|---|---|---|
-| MilkXP Ep. 3 | 18:45 + 19:45 | 23:45 + 00:45 | US evening; strongest early views (782 in 3 h on the first Short) | `45 19 * * *`, `45 20 * * *` | none |
-| Mark Manson | 20:00 | 01:00 | US evening (self-improvement wind-down; US-evening slots seed a T1 audience) | `0 21 * * *` | none |
-| Unpacked (Ep. 3, David Dobrik first) | 21:00 | 02:00 | US evening; fresh Ep. 3 YouTube budget | `0 22 * * *` | none |
-| LADbible (John Cena & Jessica Biel) | 22:30 + 23:15 | 03:30 + 04:15 | US late evening; $5K budget, A-list | `30 23 * * *`, `15 0 * * *` | none |
+| MilkXP Ep. 3 | 18:45 + 19:45 | 23:45 + 00:45 | US evening; strongest early views (782 in 3 h on the first Short) | `45 19 * * *`, `45 20 * * *` | 03:05, 04:05 |
+| Mark Manson | 20:00 | 01:00 | US evening (self-improvement wind-down; US-evening slots seed a T1 audience) | `0 21 * * *` | 04:20 |
+| Unpacked (Ep. 3, David Dobrik first) | 21:00 | 02:00 | US evening; fresh Ep. 3 YouTube budget | `0 22 * * *` | 05:20 |
+| LADbible (John Cena & Jessica Biel) | 22:30 + 23:15 | 03:30 + 04:15 | US late evening; $5K budget, A-list | `30 23 * * *`, `15 0 * * *` | 06:50, 07:35 |
+
+Local fallbacks (Task Scheduler, `shortGen fallback <CAMPAIGN> <slot>`, wake the PC) run
+`run_local.py <campaign> [--slot HH:MM] --if-gh-missed <cron UTC>`; a local run takes ~16 min (tested 2026-10-25).
 
 Since 2026-10-25 the Rohit-Gande/shortgen copy (old Friends code, posting to the same channel) is disabled,
 and its two daily posts went to a second MilkXP and LADbible slot (each cron sets PUBLISH_SLOT).
