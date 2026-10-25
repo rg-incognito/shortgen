@@ -677,8 +677,9 @@ CAMPAIGNS = {
         'render':          _render('A', names=list(_MILKXP_CAST), burned_text_ok=True,
                                    watermark={'file': 'assets/watermarks/milkxp.png', 'width_frac': 0.62,
                                               'pos': 'top'},
-                                   # A/B (2026-10-25): 18:45 Remotion captions, 19:45 ASS control.
-                                   captions_engine={'18:45': 'remotion', '*': 'ass'}),
+                                   # A/B (2026-10-25): 18:45 Remotion captions, 19:45 ASS control
+                                   # (held on ASS until the A1 layout passes a real-footage render).
+                                   captions_engine={'18:45': 'ass', '*': 'ass'}),
         # The brief asks for two kinds of clips: runs alternate which one is wanted (the analyzer
         # is asked for both; the run's type wins when one of those passes every rule).
         'clip_types': {
