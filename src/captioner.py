@@ -571,7 +571,8 @@ def _build_ass_v2(mapped, total_duration, cfg, overlays):
 
     cfg: caption_preset, caption_y, names (upper-case set), template.
     overlays: closing (text), closing_y, closing_start, tags [(t, text)],
-    caption_end (s; captions clear here so the closing line has the screen).
+    caption_end (s; captions clear here so the closing line has the screen),
+    loop_seam (s; text still up at the end fades out over it).
     """
     P = _PRESETS.get(cfg.get('caption_preset'), _PRESETS['tv'])
     cy = int(cfg.get('caption_y', 1160))
@@ -612,6 +613,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if starts and starts[0] < 0.3:
         starts[0] = 0.0
     cap_end = min(total_duration, overlays.get('caption_end') or total_duration)
+    seam_ms = int(round(1000 * float(overlays.get('loop_seam') or 0)))
     for ci, chunk in enumerate(chunks):
         s = starts[ci]
         if ci + 1 < len(chunks):
@@ -636,6 +638,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         fit = rf"\fscx{fx}" if fx < 100 else ""
         anim = (_POP_V2.format(a=round(85 * fx / 100), b=round(112 * fx / 100), c=fx)
                 if P['pop'] else "")
+        if seam_ms and e >= total_duration - 0.01:
+            anim += rf"\fad(0,{seam_ms})"   # a caption up at the end fades with the loop seam
         line = rf"{{\an5\pos({_CAP_X2},{cy}){fit}{anim}}}" + r"\N".join(rendered)
         events.append(f"Dialogue: 1,{_format_ass_time(s)},{_format_ass_time(e)},Cap,,0,0,0,,{line}")
 
@@ -651,9 +655,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         body = _ass_escape(close_lines[0])
         if len(close_lines) > 1:
             body += r"\N{\c" + _YELLOW_V2 + "}" + _ass_escape(close_lines[1])
+        # with a loop seam the closing line ends with the clip and fades out with the
+        # picture, so the last frame is the opening frame with nothing extra on it
+        fad = rf"\fad(0,{seam_ms})" if seam_ms else ""
         events.append(f"Dialogue: 3,{_format_ass_time(overlays['closing_start'])},"
-                      f"{_format_ass_time(total_duration + 0.1)},Close,,0,0,0,,"
-                      rf"{{\an5\pos(540,{overlays['closing_y']})}}" + body)
+                      f"{_format_ass_time(total_duration + (0 if seam_ms else 0.1))},Close,,0,0,0,,"
+                      rf"{{\an5\pos(540,{overlays['closing_y']}){fad}}}" + body)
     return header + "\n".join(events) + "\n"
 
 
@@ -835,7 +842,8 @@ def burn_captions(video_path, output_path, all_words, story_clips,
     render None: today's look (white hook banner, moving-highlight captions).
     render (resolved by clipper): template, caption_preset, caption_y, names,
     handle; overlays: header, context, closing, tags (output seconds),
-    last_word_end. Returns {'normalization_type', 'allowed_boxes', 'closing'}.
+    last_word_end, loop_seam (s of end-to-start dissolve).
+    Returns {'normalization_type', 'allowed_boxes', 'closing'}.
     """
     mapped = _remap_words(all_words, story_clips)
     if render:
@@ -896,7 +904,7 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
             pngs.append((p, None))
 
         # closing line rides the tail hold; captions clear when it starts
-        script_ov = {'tags': ov.get('tags') or []}
+        script_ov = {'tags': ov.get('tags') or [], 'loop_seam': float(ov.get('loop_seam') or 0)}
         last_end = ov.get('last_word_end') or dur        # no transcript words: hold = whole end
         if ov.get('closing'):
             start = max(dur - _CLOSE_MAX_S, min(last_end + 0.05, dur - _CLOSE_MIN_S))
@@ -914,7 +922,8 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
               (" + header" if header else "") + (" + context card" if ov.get('context') else "") +
               (" + closing line" if ov.get('closing') else "") +
               (f" + {len(script_ov['tags'])} tag(s)" if script_ov['tags'] else "") +
-              (f" + watermark {wm_box}" if wm_box else ""))
+              (f" + watermark {wm_box}" if wm_box else "") +
+              (f" + loop seam {script_ov['loop_seam']:.2f}s" if script_ov['loop_seam'] else ""))
         with open(os.path.join(work, 'captions.ass'), 'w', encoding='utf-8') as f:
             f.write(_build_ass_v2(mapped, dur, dict(cfg, caption_y=cy), script_ov))
         for name in _ASS_FONTS:
@@ -924,12 +933,22 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
                 print(f"  Font missing ({name}) — libass will substitute")
 
         inputs, chains, last = ['-i', os.path.abspath(video_path)], [], 'base'
-        chains.append("[0:v]unsharp=5:5:0.6:3:3:0,eq=contrast=1.05:saturation=1.1[base]")
+        seam = _seam_layer(video_path, work, dur, float(ov.get('loop_seam') or 0), len(pngs) + 1)
+        if seam:
+            # the opening frame fades in over the tail: the last frame IS the first frame,
+            # so the player's restart has no visible jump (our overlays sit on top of it)
+            chains.append(seam[1])
+            chains.append("[0:v][seam]overlay=0:0:eof_action=pass:shortest=1,"
+                          "unsharp=5:5:0.6:3:3:0,eq=contrast=1.05:saturation=1.1[base]")
+        else:
+            chains.append("[0:v]unsharp=5:5:0.6:3:3:0,eq=contrast=1.05:saturation=1.1[base]")
         for k, (p, until) in enumerate(pngs, 1):
             inputs += ['-i', p]
             enable = f":enable='lt(t,{until:.2f})'" if until else ""
             chains.append(f"[{last}][{k}:v]overlay=0:0{enable}[o{k}]")
             last = f"o{k}"
+        if seam:
+            inputs += seam[0]
         chains.append(f"[{last}]ass=captions.ass:fontsdir=.[vout]")
         af, info = _loudness_chain(video_path)
         cmd = ['ffmpeg', '-y', *inputs, '-filter_complex', ";".join(chains),
@@ -947,6 +966,36 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
         return info
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _seam_layer(video_path, work, dur, seam, index):
+    """
+    (extra ffmpeg inputs, filter chain -> [seam]) for the loop seam, or None.
+    The opening frame as a still, fading in over the last `seam` s so it is fully
+    up on the final frame. The still runs 1 s long; overlay shortest=1 ends with the video.
+    """
+    if seam <= 0 or dur <= seam:
+        return None
+    rate = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+                           'stream=r_frame_rate', '-of', 'default=noprint_wrappers=1:nokey=1', video_path],
+                          capture_output=True, text=True).stdout.strip().split('\n')[0]
+    try:
+        num, den = (rate.split('/') + ['1'])[:2]
+        fps = float(num) / float(den)
+    except (ValueError, ZeroDivisionError):
+        return None
+    if fps <= 0:
+        return None
+    first = os.path.join(work, 'first.png')
+    p = subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', os.path.abspath(video_path), '-frames:v', '1', first],
+                       capture_output=True)
+    if p.returncode != 0 or not os.path.exists(first):
+        return None
+    n = max(2, round(seam * fps))
+    off = dur - n / fps                   # first seam frame; the fade is complete on the last one
+    chain = (f"[{index}:v]format=yuva420p,fade=t=in:st=0:d={(n - 1) / fps:.4f}:alpha=1,"
+             f"setpts=PTS+{off:.4f}/TB[seam]")
+    return ['-loop', '1', '-framerate', rate, '-t', f'{n / fps + 1:.4f}', '-i', first], chain
 
 
 def _probe_duration(video_path):

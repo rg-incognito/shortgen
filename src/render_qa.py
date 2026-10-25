@@ -273,7 +273,8 @@ def run(path, ctx=None, write=True):
     dur, _, _ = probe(path)
     qa = {'file': path.replace('\\', '/').rsplit('/', 1)[-1], 'duration': round(dur, 2),
           'template': template, 'niche': niche}
-    for k in ('normalization_type', 'render_seconds', 'variant', 'punches', 'payoff_out', 'qa_retry', 'letterbox'):
+    for k in ('normalization_type', 'render_seconds', 'variant', 'punches', 'payoff_out', 'qa_retry', 'letterbox',
+              'loop_seam'):
         if ctx.get(k) is not None:
             qa[k] = ctx[k]
 
@@ -296,14 +297,18 @@ def run(path, ctx=None, write=True):
     final1 = _decode(path, 1, W // QS, H // QS)
     clean = ctx.get('clean_video')
     clean1 = _decode(clean, 1, W // QS, H // QS) if clean else None
+    # the loop seam dissolves the whole picture into the opening frame, so the final vs
+    # clean diff there is not an overlay: 1 fps samples inside the seam are left out
+    seam = float(ctx.get('loop_seam') or 0)
+    n_ov = len(final1) if not seam else max(1, int(dur - seam - 0.5) + 1)
     if clean1:
-        ov, boxes = overlay_checks(final1, clean1, ctx.get('allowed_boxes') or ())
+        ov, boxes = overlay_checks(final1[:n_ov], clean1[:n_ov], ctx.get('allowed_boxes') or ())
         qa.update(ov)
     wm = ctx.get('watermark_box')
     if wm:
         qa['watermark_box'] = [int(v) for v in wm]
         if clean1:
-            qa.update(watermark_checks(final1, clean1, wm))
+            qa.update(watermark_checks(final1[:n_ov], clean1[:n_ov], wm))
     # caption size / position: median over the 1 fps frames of 1-8 s (one
     # frame can be thrown by burned-in text or a frame with no caption up)
     ty = ctx.get('caption_y')

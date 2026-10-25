@@ -56,6 +56,14 @@ _PUNCH_GAP_S = 3.0
 _CALM_HOOK_S = 1.2
 _PUSH_PAYOFF = 0.06
 _PUSH_MIN_S = 1.0
+# Loop seam: the Shorts player restarts at the end, and since Mar 2025 every replay is a
+# public view. Our hits looped (178-190 % at the start); the stalled ones end on a frame
+# and sound unlike the opening, so the restart reads as "over" and the viewer swipes.
+# The tail's last 0.3 s dissolves into the opening frame and its audio fades, never
+# closer than the guard to the payoff word's end; no seam when the tail is shorter.
+_LOOP_SEAM = 0.30
+_SEAM_GUARD = 0.15
+_SEAM_MIN = 0.12
 
 _SENTENCE_END = re.compile(r'[.!?]["\')\]]*$')
 
@@ -209,7 +217,18 @@ def _render_config(render, story, wide_fallback=False):
         'hold_over': niche == 'B',
         'boom': boom, 'music': music,
         'names': names or None,
+        # end-to-start dissolve for the replay (on unless a profile sets loop_seam False)
+        'loop_seam': bool(render.get('loop_seam', True)),
     }
+
+
+def _loop_seam(cfg, words_out, total):
+    """Seconds of end-to-start seam for this render (0.0: none). Output-time words."""
+    if not cfg or not cfg.get('loop_seam') or total <= 0:
+        return 0.0
+    last = words_out[-1]['end'] if words_out else 0.0
+    seam = min(_LOOP_SEAM, total - last - _SEAM_GUARD)
+    return round(seam, 3) if seam >= _SEAM_MIN else 0.0
 
 
 def _tail_cut(video_path, t0, t1):
@@ -487,12 +506,20 @@ def create_story_short(video_path, story, output_dir, episode_name,
                 part_paths.append(part_path)
 
         print(f"  Merging {len(part_paths)} parts...")
+        total = sum(c['end_seconds'] - c['start_seconds'] for c in expanded_clips)
+        seam = _loop_seam(cfg, _remap_words(all_words or [], expanded_clips), total)
+        plan['loop_seam'] = seam or None
         fade = None
         if held:
             last_end, nxt = held
             f0 = max(last_end + 0.02, nxt - _HOLD_FADE_LEAD) - expanded_clips[-1]['start_seconds']
             fade = (max(0.0, f0), _HOLD_FADE)
             print(f"  Tail held over the next speaker: audio fades {f0:.2f}s into the last part")
+        elif seam and expanded_clips:
+            last_d = expanded_clips[-1]['end_seconds'] - expanded_clips[-1]['start_seconds']
+            fade = (max(0.0, last_d - seam), seam)
+        if seam:
+            print(f"  Loop seam: the last {seam:.2f}s dissolves into the opening frame")
         _build_audio(video_path, expanded_clips, audio_path, fade_out=fade)
         if cfg and cfg['boom'] and plan.get('payoff_out') is not None:
             if _add_payoff_boom(audio_path, plan['payoff_out']):
@@ -509,6 +536,7 @@ def create_story_short(video_path, story, output_dir, episode_name,
             words_out = _remap_words(all_words or [], expanded_clips)
             render_cfg = _caption_settings(cfg, stats)
             ov = _overlay_settings(story, cfg, expanded_clips, words_out)
+            ov['loop_seam'] = plan.get('loop_seam')
             enc = burn_captions(merged_path, out_path, all_words or [], expanded_clips,
                                 render=render_cfg, overlays=ov)
         def layout_fallback():
@@ -688,7 +716,8 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
            'payoff_out': plan.get('payoff_out'), 'punches': plan.get('toggles'),
            'allowed_boxes': enc.get('allowed_boxes'),
            'watermark_box': enc.get('watermark_box'),
-           'letterbox': letterbox or None}
+           'letterbox': letterbox or None,
+           'loop_seam': plan.get('loop_seam')}
     if cfg:
         ctx['caption_y'] = enc.get('caption_y')
         ctx['burned_text_ok'] = cfg.get('burned_text_ok', False)
@@ -723,7 +752,8 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
                                           # clamped above the safe line, so it cannot cause the fail
                                           'context': story.get('context_line') if cfg.get('context_required')
                                           else None,
-                                          'last_word_end': words_out[-1]['end'] if words_out else None})
+                                          'last_word_end': words_out[-1]['end'] if words_out else None,
+                                          'loop_seam': plan.get('loop_seam')})
             # render_cfg still carries the watermark: the safe re-encode keeps the brand logo
             ctx.update(normalization_type=enc.get('normalization_type'), allowed_boxes=None,
                        caption_y=enc.get('caption_y'), watermark_box=enc.get('watermark_box'),
