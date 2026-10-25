@@ -274,7 +274,7 @@ def run(path, ctx=None, write=True):
     qa = {'file': path.replace('\\', '/').rsplit('/', 1)[-1], 'duration': round(dur, 2),
           'template': template, 'niche': niche}
     for k in ('normalization_type', 'render_seconds', 'variant', 'punches', 'payoff_out', 'qa_retry', 'letterbox',
-              'loop_seam'):
+              'loop_seam', 'captions_engine', 'remotion_fallback'):
         if ctx.get(k) is not None:
             qa[k] = ctx[k]
 

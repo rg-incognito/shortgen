@@ -20,6 +20,10 @@ With a render config (clipper resolves it from the profile) the template
 look is used instead: Anton captions at a measured 64 px cap height with a
 static keyword highlight, a Montserrat headline in the A1 blur band, and the
 originality layer (context card, closing line, stage directions).
+render['captions_engine'] = 'remotion' draws those same caption chunks with
+Remotion instead (src/remotion_captions.py: word pops, the spoken word in
+yellow), composited where the ass= captions go; any Remotion problem falls
+back to the ASS captions.
 """
 import json
 import os
@@ -565,7 +569,55 @@ def _ass_escape(text):
     return text.replace('\\', '').replace('{', '(').replace('}', ')').replace('\n', ' ')
 
 
-def _build_ass_v2(mapped, total_duration, cfg, overlays):
+def _caption_chunks(mapped, total_duration, cfg, overlays):
+    """
+    The template caption layout shared by both caption engines (ASS and Remotion):
+    a list of {'s', 'e', 'lines' [[(word dict, colour or None)]], 'fx' (shrink-to-fit
+    %), 'fade' (up on the last frame: fades with the loop seam)}. Output seconds.
+    """
+    P = _PRESETS.get(cfg.get('caption_preset'), _PRESETS['tv'])
+    fs = _ass_fontsize(_font_path(_FONT_FILE), P['cap'])
+    chunks = _chunk_words_v2(mapped, P['words'], P['chars'])
+    names = cfg.get('names') or _DEFAULT_NAMES
+    picks = [_keyword_pick(c, names, bool(re.search(r'[.!?]["\')\]]*$', c[-1]['text'])))
+             for c in chunks]
+    # keep the highlight rare: drop the weakest picks above the share cap
+    limit = int(_KEYWORD_SHARE * len(chunks))
+    order = sorted((i for i, p in enumerate(picks) if p), key=lambda i: (picks[i][2], -i))
+    while sum(1 for p in picks if p) > limit and order:
+        picks[order.pop(0)] = None
+
+    starts = [max(0.0, c[0]['start'] - _CAPTION_LEAD_V2) for c in chunks]
+    if starts and starts[0] < 0.3:
+        starts[0] = 0.0
+    cap_end = min(total_duration, overlays.get('caption_end') or total_duration)
+    out = []
+    for ci, chunk in enumerate(chunks):
+        s = starts[ci]
+        if ci + 1 < len(chunks):
+            e = min(starts[ci + 1], chunk[-1]['end'] + _CHUNK_HOLD_V2)
+        else:
+            e = cap_end                     # the last chunk stays up (until the closing line)
+        e = min(e, cap_end) if ci + 1 == len(chunks) else e
+        if e - s < 0.04:
+            continue
+        kw = picks[ci]
+        texts = [w['text'] for w in chunk]
+        lines = _wrap_two(texts, P.get('line_chars', P['chars'])) if P['lines'] > 1 else [texts]
+        coloured, j = [], 0
+        for ln in lines:
+            row = []
+            for _ in ln:
+                row.append((chunk[j], kw[1] if kw and j == kw[0] else None))
+                j += 1
+            coloured.append(row)
+        width = max(_measure_chunk(" ".join(ln), fs) for ln in lines)
+        fx = 100 if not width or width <= _CAP_MAX_W else max(_CAP_MIN_FIT, int(100 * _CAP_MAX_W / width))
+        out.append({'s': s, 'e': e, 'lines': coloured, 'fx': fx, 'fade': e >= total_duration - 0.01})
+    return out
+
+
+def _build_ass_v2(mapped, total_duration, cfg, overlays, captions=True):
     """
     Template captions + originality overlays in one ASS script.
 
@@ -573,6 +625,7 @@ def _build_ass_v2(mapped, total_duration, cfg, overlays):
     overlays: closing (text), closing_y, closing_start, tags [(t, text)],
     caption_end (s; captions clear here so the closing line has the screen),
     loop_seam (s; text still up at the end fades out over it).
+    captions False: tags and closing line only (the Remotion layer draws the captions).
     """
     P = _PRESETS.get(cfg.get('caption_preset'), _PRESETS['tv'])
     cy = int(cfg.get('caption_y', 1160))
@@ -599,46 +652,16 @@ Style: Tag,Montserrat Black,{tag_fs},{_YELLOW_V2},&H000000FF&,{_OUTLINE},&H80000
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events = []
-    chunks = _chunk_words_v2(mapped, P['words'], P['chars'])
-    names = cfg.get('names') or _DEFAULT_NAMES
-    picks = [_keyword_pick(c, names, bool(re.search(r'[.!?]["\')\]]*$', c[-1]['text'])))
-             for c in chunks]
-    # keep the highlight rare: drop the weakest picks above the share cap
-    limit = int(_KEYWORD_SHARE * len(chunks))
-    order = sorted((i for i, p in enumerate(picks) if p), key=lambda i: (picks[i][2], -i))
-    while sum(1 for p in picks if p) > limit and order:
-        picks[order.pop(0)] = None
-
-    starts = [max(0.0, c[0]['start'] - _CAPTION_LEAD_V2) for c in chunks]
-    if starts and starts[0] < 0.3:
-        starts[0] = 0.0
-    cap_end = min(total_duration, overlays.get('caption_end') or total_duration)
     seam_ms = int(round(1000 * float(overlays.get('loop_seam') or 0)))
-    for ci, chunk in enumerate(chunks):
-        s = starts[ci]
-        if ci + 1 < len(chunks):
-            e = min(starts[ci + 1], chunk[-1]['end'] + _CHUNK_HOLD_V2)
-        else:
-            e = cap_end                     # the last chunk stays up (until the closing line)
-        e = min(e, cap_end) if ci + 1 == len(chunks) else e
-        if e - s < 0.04:
-            continue
-        kw = picks[ci]
-        texts = [w['text'] for w in chunk]
-        lines = _wrap_two(texts, P.get('line_chars', P['chars'])) if P['lines'] > 1 else [texts]
-        rendered, j = [], 0
-        for ln in lines:
-            parts = []
-            for t in ln:
-                parts.append((r"{\c" + kw[1] + "}" + t + r"{\c" + _WHITE + "}") if kw and j == kw[0] else t)
-                j += 1
-            rendered.append(" ".join(parts))
-        width = max(_measure_chunk(" ".join(ln), fs) for ln in lines)
-        fx = 100 if not width or width <= _CAP_MAX_W else max(_CAP_MIN_FIT, int(100 * _CAP_MAX_W / width))
+    for ch in (_caption_chunks(mapped, total_duration, cfg, overlays) if captions else ()):
+        s, e, fx = ch['s'], ch['e'], ch['fx']
+        rendered = [" ".join((r"{\c" + c + "}" + w['text'] + r"{\c" + _WHITE + "}") if c else w['text']
+                             for w, c in ln)
+                    for ln in ch['lines']]
         fit = rf"\fscx{fx}" if fx < 100 else ""
         anim = (_POP_V2.format(a=round(85 * fx / 100), b=round(112 * fx / 100), c=fx)
                 if P['pop'] else "")
-        if seam_ms and e >= total_duration - 0.01:
+        if seam_ms and ch['fade']:
             anim += rf"\fad(0,{seam_ms})"   # a caption up at the end fades with the loop seam
         line = rf"{{\an5\pos({_CAP_X2},{cy}){fit}{anim}}}" + r"\N".join(rendered)
         events.append(f"Dialogue: 1,{_format_ass_time(s)},{_format_ass_time(e)},Cap,,0,0,0,,{line}")
@@ -841,9 +864,10 @@ def burn_captions(video_path, output_path, all_words, story_clips,
 
     render None: today's look (white hook banner, moving-highlight captions).
     render (resolved by clipper): template, caption_preset, caption_y, names,
-    handle; overlays: header, context, closing, tags (output seconds),
-    last_word_end, loop_seam (s of end-to-start dissolve).
-    Returns {'normalization_type', 'allowed_boxes', 'closing'}.
+    handle, captions_engine ('ass' | 'remotion': the Remotion caption band,
+    ASS whenever it is unavailable); overlays: header, context, closing, tags
+    (output seconds), last_word_end, loop_seam (s of end-to-start dissolve).
+    Returns {'normalization_type', 'allowed_boxes', 'closing', 'captions_engine', ...}.
     """
     mapped = _remap_words(all_words, story_clips)
     if render:
@@ -924,8 +948,13 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
               (f" + {len(script_ov['tags'])} tag(s)" if script_ov['tags'] else "") +
               (f" + watermark {wm_box}" if wm_box else "") +
               (f" + loop seam {script_ov['loop_seam']:.2f}s" if script_ov['loop_seam'] else ""))
+        # captions engine: Remotion draws the captions as a transparent band (tags and the
+        # closing line stay ASS); any Remotion problem falls back to the ASS captions
+        rm, rm_note = None, None
+        if cfg.get('captions_engine') == 'remotion' and mapped:
+            rm, rm_note = _remotion_layer(video_path, work, mapped, dur, dict(cfg, caption_y=cy), script_ov)
         with open(os.path.join(work, 'captions.ass'), 'w', encoding='utf-8') as f:
-            f.write(_build_ass_v2(mapped, dur, dict(cfg, caption_y=cy), script_ov))
+            f.write(_build_ass_v2(mapped, dur, dict(cfg, caption_y=cy), script_ov, captions=rm is None))
         for name in _ASS_FONTS:
             if os.path.exists(_font_path(name)):
                 shutil.copy(_font_path(name), os.path.join(work, name))
@@ -949,14 +978,37 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
             last = f"o{k}"
         if seam:
             inputs += seam[0]
-        chains.append(f"[{last}]ass=captions.ass:fontsdir=.[vout]")
         af, info = _loudness_chain(video_path)
-        cmd = ['ffmpeg', '-y', *inputs, '-filter_complex', ";".join(chains),
-               '-map', '[vout]', '-map', '0:a?', *_VIDEO_ARGS, '-af', af, *_AUDIO_ARGS,
-               os.path.abspath(output_path)]
-        p = subprocess.run(cmd, capture_output=True, text=True, errors='replace', cwd=work)
+
+        def encode(rm):
+            ins, ch, top = list(inputs), list(chains), last
+            if rm:
+                # the caption band sits where the ass= captions would: over every layer of ours
+                k = len(pngs) + 1 + (1 if seam else 0)
+                ins += ['-framerate', rm['rate'], '-start_number', str(rm['start']), '-i', rm['pattern']]
+                ch.append(f"[{top}][{k}:v]overlay=0:{rm['offset_y']}:eof_action=pass[rmv]")
+                top = 'rmv'
+            ch.append(f"[{top}]ass=captions.ass:fontsdir=.[vout]")
+            cmd = ['ffmpeg', '-y', *ins, '-filter_complex', ";".join(ch),
+                   '-map', '[vout]', '-map', '0:a?', *_VIDEO_ARGS, '-af', af, *_AUDIO_ARGS,
+                   os.path.abspath(output_path)]
+            return cmd, subprocess.run(cmd, capture_output=True, text=True, errors='replace', cwd=work)
+
+        cmd, p = encode(rm)
+        if p.returncode != 0 and rm:
+            rm_note = f"ffmpeg could not composite the Remotion layer: {p.stderr.strip()[-200:]}"
+            print(f"  Remotion captions dropped ({rm_note}) — burning ASS captions")
+            rm = None
+            with open(os.path.join(work, 'captions.ass'), 'w', encoding='utf-8') as f:
+                f.write(_build_ass_v2(mapped, dur, dict(cfg, caption_y=cy), script_ov))
+            cmd, p = encode(None)
         if p.returncode != 0:
             raise subprocess.CalledProcessError(p.returncode, cmd, p.stdout, p.stderr)
+        info['captions_engine'] = 'remotion' if rm else 'ass'
+        if rm:
+            info['remotion_seconds'] = rm['seconds']
+        if rm_note:
+            info['remotion_fallback'] = rm_note
         info['normalization_type'] = _norm_type(p.stderr)
         _cap_true_peak(video_path, output_path, info)
         info['allowed_boxes'] = allowed
@@ -976,15 +1028,8 @@ def _seam_layer(video_path, work, dur, seam, index):
     """
     if seam <= 0 or dur <= seam:
         return None
-    rate = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
-                           'stream=r_frame_rate', '-of', 'default=noprint_wrappers=1:nokey=1', video_path],
-                          capture_output=True, text=True).stdout.strip().split('\n')[0]
-    try:
-        num, den = (rate.split('/') + ['1'])[:2]
-        fps = float(num) / float(den)
-    except (ValueError, ZeroDivisionError):
-        return None
-    if fps <= 0:
+    rate, fps = _probe_rate(video_path)
+    if not fps:
         return None
     first = os.path.join(work, 'first.png')
     p = subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', os.path.abspath(video_path), '-frames:v', '1', first],
@@ -996,6 +1041,44 @@ def _seam_layer(video_path, work, dur, seam, index):
     chain = (f"[{index}:v]format=yuva420p,fade=t=in:st=0:d={(n - 1) / fps:.4f}:alpha=1,"
              f"setpts=PTS+{off:.4f}/TB[seam]")
     return ['-loop', '1', '-framerate', rate, '-t', f'{n / fps + 1:.4f}', '-i', first], chain
+
+
+def _probe_rate(video_path):
+    """(r_frame_rate string, fps float) of the first video stream; fps None when unreadable."""
+    rate = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+                           'stream=r_frame_rate', '-of', 'default=noprint_wrappers=1:nokey=1', video_path],
+                          capture_output=True, text=True).stdout.strip().split('\n')[0]
+    try:
+        num, den = (rate.split('/') + ['1'])[:2]
+        fps = float(num) / float(den)
+    except (ValueError, ZeroDivisionError):
+        return rate, None
+    return rate, (fps if fps > 0 else None)
+
+
+def _remotion_layer(video_path, work, mapped, dur, cfg, script_ov):
+    """
+    (Remotion caption band, None) or (None, why it fell back). The band is a PNG
+    sequence ({'pattern', 'start', 'rate', 'offset_y', 'seconds'}) of the same
+    chunks the ASS captions would show. Never raises.
+    """
+    try:
+        import remotion_captions as RC
+        rate, fps = _probe_rate(video_path)
+        if not fps:
+            raise RC.RemotionUnavailable(f'unreadable frame rate {rate!r}')
+        P = _PRESETS.get(cfg.get('caption_preset'), _PRESETS['tv'])
+        props = RC.build_props(_caption_chunks(mapped, dur, cfg, script_ov), dur, fps, cfg['caption_y'],
+                               seam=script_ov.get('loop_seam') or 0, center_x=_CAP_X2, cap_px=P['cap'],
+                               lead=_CAPTION_LEAD_V2)
+        out = RC.render(props, work)
+        out['rate'] = rate
+        print(f"  Captions: Remotion layer, {out['frames']} frames in {out['seconds']:.0f}s")
+        return out, None
+    except Exception as exc:                 # Remotion must never break a render
+        note = f"{type(exc).__name__}: {exc}"
+        print(f"  Remotion captions unavailable ({note}) — burning ASS captions")
+        return None, note[:300]
 
 
 def _probe_duration(video_path):

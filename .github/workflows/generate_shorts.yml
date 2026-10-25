@@ -77,6 +77,49 @@ jobs:
           printf 'torch==2.0.0+cpu\ntorchaudio==2.0.0+cpu\n' > /tmp/constraints.txt
           pip install -r requirements.txt -c /tmp/constraints.txt
 
+      # Remotion caption layer (remotion/, render['captions_engine']). Every step here is
+      # non-fatal: without Node / Remotion the pipeline burns the ASS captions instead.
+      # node_modules (with Remotion's headless Chromium in node_modules/.remotion) is cached
+      # whole on the lockfile, so a warm run skips npm ci and the browser download.
+      - name: Setup Node (Remotion captions)
+        id: node
+        continue-on-error: true
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Restore Remotion node_modules + Chromium
+        id: rmcache
+        if: steps.node.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/restore@v5
+        with:
+          path: remotion/node_modules
+          key: remotion-nm-${{ runner.os }}-node24.11.0-${{ hashFiles('remotion/package-lock.json') }}
+
+      - name: Install Remotion
+        id: rminstall
+        if: steps.node.outcome == 'success' && steps.rmcache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 4
+        working-directory: remotion
+        run: |
+          start=$(date +%s)
+          npm ci --no-audit --no-fund
+          echo "npm ci took $(( $(date +%s) - start ))s"
+          start=$(date +%s)
+          npx remotion browser ensure
+          echo "browser ensure took $(( $(date +%s) - start ))s"
+
+      # saved only after a complete install, so a half-finished one is never cached
+      - name: Save Remotion node_modules + Chromium
+        if: steps.rminstall.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: remotion/node_modules
+          key: ${{ steps.rmcache.outputs.cache-primary-key }}
+
       - name: Cache HuggingFace models
         uses: actions/cache@v5
         with:
@@ -113,6 +156,8 @@ jobs:
           # Campaigns with two daily slots: pin each cron to its own slot.
           PUBLISH_SLOT:                ${{ (github.event.schedule == '45 19 * * *' && '18:45') || (github.event.schedule == '45 20 * * *' && '19:45') || (github.event.schedule == '30 23 * * *' && '22:30') || (github.event.schedule == '15 0 * * *' && '23:15') || '' }}
           WHISPER_MODEL:               ${{ github.event.inputs.whisper_model || 'medium' }}
+          # remotion/ was installed above (or that failed): never npm ci mid-run, fall back to ASS
+          REMOTION_AUTO_INSTALL:       '0'
           VIDEOS_FOLDER_ID:  '1bIFaNpfBy1Bp9R14T22EV-hMsYYrLeTS'
           SHORTS_FOLDER_ID:  '1kzFXWZQu8QQVtZKeAVvSgHcLaRFfK6tg'
           ARCHIVE_FOLDER_ID: '1nHZCaWO_KvkV52TekkF8ecC5JtIlXqJj'
