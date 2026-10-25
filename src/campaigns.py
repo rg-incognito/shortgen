@@ -584,8 +584,9 @@ CAMPAIGNS = {
         'target_seconds':  (15, 22),
         'max_seconds':     35.0,
         'playlist':        'John Cena & Jessica Biel',
-        # Celebrity entertainment, US late evening (free slot: 22:00 is tonyhawk).
-        'publish_slots_et': ['22:30'],
+        # Celebrity entertainment, US late evening (free slot: 22:00 is tonyhawk); 23:15 is a
+        # second daily Short (the slot the stopped Friends posts used to take).
+        'publish_slots_et': ['22:30', '23:15'],
         'title_names':     ['John Cena', 'Jessica Biel', 'LADbible'],
         'cast_names':      ['John', 'Cena', 'Jessica', 'Biel', 'LADbible'],
         # A celebrity sit-down / game with two talkers: the talk niche (B1 full-bleed, talk captions).
@@ -656,8 +657,9 @@ CAMPAIGNS = {
                             'caught', 'milk', 'challenge', 'grade', 'grades', 'class', 'cube', 'couch', 'hoop'],
         'header_echo_share': 0.6,
         'playlist':        'milkXP',
-        # Students and young adults, US after-dinner scroll (free slot between 19:30 and 20:00).
-        'publish_slots_et': ['19:45'],
+        # Students and young adults, US after-dinner scroll (free slot between 19:30 and 20:00);
+        # 18:45 is a second daily Short (the earliest slot inside the window in both EST and EDT is 18:30).
+        'publish_slots_et': ['18:45', '19:45'],
         'title_names':     ['milkXP'] + _MILKXP_CREATORS,
         'cast_names':      list(_MILKXP_CAST),
         # A creator challenge show: reality-like entertainment (niche A, A1 with a header band).

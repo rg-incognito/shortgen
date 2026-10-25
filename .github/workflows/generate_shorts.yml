@@ -5,10 +5,12 @@ on:
   # campaign's publish slot (src/campaigns.py publish_slots_et, US Eastern) and the upload
   # is scheduled to go public exactly at the slot (see WHOP_HANDOFF.md).
   schedule:
+    - cron: '45 19 * * *'   # milkxp     -> 18:45 ET
     - cron: '45 20 * * *'   # milkxp     -> 19:45 ET
     - cron: '0 21 * * *'    # markmanson -> 20:00 ET
     - cron: '0 22 * * *'    # unpacked   -> 21:00 ET
     - cron: '30 23 * * *'   # ladbible   -> 22:30 ET
+    - cron: '15 0 * * *'    # ladbible   -> 23:15 ET
   workflow_dispatch:
     inputs:
       campaign:
@@ -105,9 +107,11 @@ jobs:
           GH_TOKEN:                    ${{ github.token }}
           SPREADSHEET_ID:              '1d-GID8JCIrw89ygIKXfsyT9Fe0qtxxmsUaKORuDliOM'
           # Scheduled runs can't pass inputs, so the cron slot decides the campaign.
-          CAMPAIGN: ${{ github.event.inputs.campaign || (github.event.schedule == '45 20 * * *' && 'milkxp') || (github.event.schedule == '0 21 * * *' && 'markmanson') || (github.event.schedule == '0 22 * * *' && 'unpacked') || (github.event.schedule == '30 23 * * *' && 'ladbible') || 'markmanson' }}
+          CAMPAIGN: ${{ github.event.inputs.campaign || (github.event.schedule == '45 19 * * *' && 'milkxp') || (github.event.schedule == '45 20 * * *' && 'milkxp') || (github.event.schedule == '0 21 * * *' && 'markmanson') || (github.event.schedule == '0 22 * * *' && 'unpacked') || (github.event.schedule == '30 23 * * *' && 'ladbible') || (github.event.schedule == '15 0 * * *' && 'ladbible') || 'markmanson' }}
           VIDEO_FILE_ID:               ${{ github.event.inputs.video_file_id }}
           EPISODE_NAME:                ${{ github.event.inputs.episode_name }}
+          # Campaigns with two daily slots: pin each cron to its own slot.
+          PUBLISH_SLOT:                ${{ (github.event.schedule == '45 19 * * *' && '18:45') || (github.event.schedule == '45 20 * * *' && '19:45') || (github.event.schedule == '30 23 * * *' && '22:30') || (github.event.schedule == '15 0 * * *' && '23:15') || '' }}
           WHISPER_MODEL:               ${{ github.event.inputs.whisper_model || 'medium' }}
           VIDEOS_FOLDER_ID:  '1bIFaNpfBy1Bp9R14T22EV-hMsYYrLeTS'
           SHORTS_FOLDER_ID:  '1kzFXWZQu8QQVtZKeAVvSgHcLaRFfK6tg'
