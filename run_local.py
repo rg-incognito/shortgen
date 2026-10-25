@@ -5,6 +5,9 @@ Run the shorts pipeline on this PC instead of GitHub Actions.
     python run_local.py <campaign> --if-gh-missed HH:MM
         # fallback mode: only run if GitHub Actions has no successful / running
         # scheduled run since today's HH:MM UTC slot (Actions minutes ran out, etc.)
+    python run_local.py <campaign> --slot HH:MM ...
+        # pin the run to one of the campaign's publish_slots_et (PUBLISH_SLOT), for
+        # campaigns with two daily slots
 
 Secrets come from .env (gitignored), the same values as the GitHub secrets:
     GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GEMINI_API_KEY, HF_TOKEN
@@ -16,11 +19,13 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).parent
 SA_FILE = ROOT / 'parental-app-635e3-f7946c9be549.json'
 LOCK = ROOT / 'logs' / 'run_local.lock'
+LOCK_WAIT_MIN = 90   # fallbacks fire close together: queue behind a running one, don't skip
 
 # Same non-secret settings as .github/workflows/generate_shorts.yml
 DEFAULTS = {
@@ -90,13 +95,19 @@ def main():
             return
 
     (ROOT / 'logs').mkdir(exist_ok=True)
-    # This PC is slow; never run two pipelines at once.
-    if LOCK.exists() and _pid_alive(LOCK.read_text().strip()):
-        sys.exit(f'another local run is in progress ({LOCK})')
+    # This PC is slow; never run two pipelines at once. A slot whose run already went out
+    # makes main.py exit at once, so waiting behind another run costs nothing.
+    deadline = time.time() + LOCK_WAIT_MIN * 60
+    while LOCK.exists() and _pid_alive(LOCK.read_text().strip()):
+        if time.time() > deadline:
+            sys.exit(f'another local run is still in progress after {LOCK_WAIT_MIN} min ({LOCK})')
+        time.sleep(30)
     LOCK.write_text(str(os.getpid()))
 
     env = _load_env()
     env['CAMPAIGN'] = campaign
+    if '--slot' in sys.argv:
+        env['PUBLISH_SLOT'] = sys.argv[sys.argv.index('--slot') + 1]
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M')
     log = ROOT / 'logs' / f'{stamp}_{campaign}.log'
     print(f'Running {campaign} locally — log: {log}')
