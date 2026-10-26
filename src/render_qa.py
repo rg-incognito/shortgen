@@ -352,7 +352,11 @@ def run(path, ctx=None, write=True):
     edit = ctx.get('edit') or {}
     if edit:
         # edit layer: cuts (scene cuts + the plan's reframe cuts), flashes, SFX, as planned
-        events = sorted(set(c for c in cuts if c > 0.05) | set(c for c in edit.get('edit_cuts') or [] if c > 0.05))
+        raw_ev = sorted(set(c for c in cuts if c > 0.05) | set(c for c in edit.get('edit_cuts') or [] if c > 0.05))
+        events = []
+        for c in raw_ev:            # a whip pan / light leak fires the detectors frame after frame: one cut
+            if not events or c - events[-1] >= 0.3:
+                events.append(c)
         qa['first_cut'] = round(events[0], 2) if events else None
         # the plan's own cuts count as edit events: its frame-difference detector catches cuts
         # between similar shots (a white set) that the ffmpeg scene score above misses
