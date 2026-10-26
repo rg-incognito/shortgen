@@ -827,6 +827,11 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
             qa_retry = False
         broken = _qa_layout_broken(qa)
         hook = _qa_hook_failed(qa)
+        if hook and not broken and not _qa_burned_text(qa) and round_ == MAX_RESELECT:
+            # edit-layer hook fails never leave a campaign with zero Shorts: the last pick uploads
+            print(f"::warning title=Edit layer fallback::{episode_name} '{story['storyline_title']}' uploads "
+                  f"despite the hook QA ({'; '.join(hook)}): the re-pick failed it too")
+            hook = []
         if not _qa_burned_text(qa) and not broken and not hook:
             other = [f for f in (qa or {}).get('hard_fail') or []]
             if other:
