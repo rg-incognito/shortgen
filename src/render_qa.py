@@ -354,6 +354,11 @@ def run(path, ctx=None, write=True):
         # edit layer: cuts (scene cuts + the plan's reframe cuts), flashes, SFX, as planned
         events = sorted(set(c for c in cuts if c > 0.05) | set(c for c in edit.get('edit_cuts') or [] if c > 0.05))
         qa['first_cut'] = round(events[0], 2) if events else None
+        # the plan's own cuts count as edit events: its frame-difference detector catches cuts
+        # between similar shots (a white set) that the ffmpeg scene score above misses
+        raw = qa.get('longest_scene_shot', qa['longest_shot'])
+        qa.update(shot_stats(events, dur))
+        qa['longest_scene_shot'] = raw
         qa['flashes'] = edit.get('flashes') or []
         qa['sfx'] = [[e.get('kind'), e.get('t')] for e in edit.get('sfx') or []]
         if dur > 0:

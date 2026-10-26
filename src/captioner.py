@@ -752,7 +752,8 @@ _HL_YELLOW = (255, 228, 0, 255)
 _HL_RED = (255, 45, 45, 255)
 _HL_LINE_CHARS = 22
 _HL_RED_WORDS = {'NOT', 'NO', 'NEVER', 'WRONG', 'WORST', 'LOST', 'FAIL', 'FAILED', 'CAUGHT', 'HATE', 'STOP',
-                 'NOBODY', 'NOTHING', 'DISGUSTING', 'BROKE', 'QUIT', 'FIRED', 'DEAD', 'SCREAM', 'SCARED'}
+                 'NOBODY', 'NOTHING', 'DISGUSTING', 'BROKE', 'QUIT', 'FIRED', 'DEAD', 'SCREAM', 'SCARED',
+                 'TERRIBLE', 'HORRIBLE', 'AWFUL', 'GROSS'}
 _HL_STOP = _STOPWORDS | {'WAS', 'WERE', 'HAS', 'HAVE', 'HAD', 'DID', 'DOES', 'DO', 'CAN', 'WILL', 'GOT'}
 
 

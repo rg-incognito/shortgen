@@ -17,7 +17,7 @@ from drive_client import (download_video, upload_shorts, pick_video, pick_from_f
 from transcriber import transcribe_video
 from analyzer import (analyze_candidates, generate_yt_metadata, build_sentences, build_candidate,
                       hook_problems, overlap_problems, rank_score, later_start, rubric_points, story_offset,
-                      trim_filler_opener, layer_line, HOOK_CLASSES, PAYOFF_MAX_TAIL, GENRES)
+                      trim_filler_opener, layer_line, HOOK_CLASSES, PAYOFF_MAX_TAIL, GENRES, length_trim)
 from clipper import create_story_short, edited_duration
 from sheet_tracker import SheetTracker, SKIP_PREFIX
 from campaigns import (get_campaign, find_banned, find_transcript_banned, enforce_caption,
@@ -417,6 +417,20 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
             for c in story['clips']:
                 c['end_seconds'] = min(c['end_seconds'], src_dur - 0.05)
             dur = edited_duration(story, all_words, profile['silence_thresh'], **dur_kwargs)
+            if edit_config(profile).get('length') and dur > story_max_seconds(story, profile) + 0.05:
+                # P0-1: over the cap -> start later on a clean sentence (the payoff stays last)
+                lo_, hi_ = profile.get('min_seconds') or 0.0, story_max_seconds(story, profile)
+
+                def fits(s):
+                    s['_dur_try'] = edited_duration(s, all_words, profile['silence_thresh'], **dur_kwargs)
+                    return (lo_ <= s['_dur_try'] <= hi_ + 0.05
+                            and not _hook_problems(s, sents, all_words, profile))
+                cut = length_trim(story, sents, all_words, fits)
+                if cut:
+                    a_, k_ = cut['_length_trim']
+                    print(f"      ~ {story['storyline_title']}: {dur:.1f}s > {hi_:g}s, starts later S{a_} -> S{k_} "
+                          f"\"{cut['opening_line'][:50]}\" ({cut['_dur_try']:.1f}s)")
+                    story, dur = cut, cut['_dur_try']
             story['_edited_seconds'] = round(dur, 1)
             story['_max_seconds'] = story_max_seconds(story, profile)
             problems += _apply_layers(story, all_words, profile)

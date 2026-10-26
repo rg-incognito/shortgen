@@ -351,6 +351,45 @@ def later_start(story, sents, words, max_shift=LATER_START_MAX):
     return None
 
 
+def start_at(story, sents, words, k):
+    """The same story with its first clip started on sentence k (inside that clip)."""
+    a, b = story['_sentences'][0]
+    new = dict(story)
+    new.pop('_open_w', None)
+    new.pop('_filler_trim', None)
+    new['clips'] = [dict(c) for c in story['clips']]
+    new['clips'][0]['start_seconds'] = clip_times(sents, words, k, b)[0]
+    new['_sentences'] = [(k, b)] + list(story['_sentences'][1:])
+    new['opening_line'] = new['_llm_opening'] = sents[k]['text'].strip()
+    new['_llm_start'] = k
+    new['_total_seconds'] = round(sum(c['end_seconds'] - c['start_seconds'] for c in new['clips']), 1)
+    if new.get('payoff_t') is not None and new['_total_seconds']:
+        p_off = story_offset(new['clips'], new['payoff_t'])
+        if p_off is not None:
+            new['_payoff_pos'] = round(p_off / new['_total_seconds'], 2)
+    new['annotations'] = [x for x in story.get('annotations') or []
+                          if story_offset(new['clips'], x['t']) is not None]
+    return new
+
+
+def length_trim(story, sents, words, fits):
+    """
+    Edit layer (P0-1): a moment that runs over the length cap starts later instead of being
+    thrown away. Tries the first clip's later sentences that start a new thought, in order,
+    and returns the first story for which fits(story) is True (fits checks the edited length
+    and the opener rules), or None. The payoff end is never touched.
+    """
+    a, b = story['_sentences'][0]
+    for k in range(a + 1, b + 1):
+        if not sents[k].get('clean_start', True):
+            continue
+        new = start_at(story, sents, words, k)
+        new['_length_trim'] = (a, k)
+        if fits(new):
+            return new
+    return None
+
+
 def _words_of(text):
     return re.findall(r"[a-z0-9']+", (text or '').lower())
 
@@ -462,6 +501,10 @@ _PERSON = re.compile(
     r"somebody|people|guy|guys|girl|man|woman|kid|kids|mom|dad|mother|father|wife|husband|boyfriend|"
     r"girlfriend|friend|boss|brother|sister|son|daughter)\b", re.IGNORECASE)
 OPENER_MAX_WORDS = 14
+# "We also do it in a lot of other areas", "That's why...", "Which is...": only make sense after
+# the line before (seen on a Mark Manson pick, 2026-10-26).
+_LEANS_BACK = re.compile(r"^\W*((?:\w+'?\w*\s+){0,2}(also|either|as well)\b|that'?s why\b|which\b|"
+                         r"it'?s the same\b|same thing\b|(?:\w+'?\w*\s+){1,4}too\W*$)", re.IGNORECASE)
 
 
 def opener_rejects(sents, a, opening=None, genre=None):
@@ -477,6 +520,8 @@ def opener_rejects(sents, a, opening=None, genre=None):
         out.append('opens mid-sentence (continues the line before)')
     if _OUTRO_OPENER.search(opening) or _OUTRO_ANYWHERE.search(opening):
         out.append('opens on an outro / thank-you line')
+    if _LEANS_BACK.search(opening):
+        out.append('opener leans on the line before ("also" / "too" / "that\'s why")')
     if genre in ('podcast', 'talk'):
         n = len(_words_of(opening))
         jargon = _JARGON.search(opening)

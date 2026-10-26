@@ -573,9 +573,11 @@ def _pace_plan(parts, words_out, payoff_out, payoff_start, crop_w, cap=_PACE_CAP
         if t is not None:
             adds.append(round(t, 3))
     # 3. no framing held longer than cap
+    stuck = set()
     while True:
         events = sorted({0.0, total, *hard, *adds})
-        long_gap = next(((a, b) for a, b in zip(events, events[1:]) if b - a > cap + 1e-6), None)
+        long_gap = next(((a, b) for a, b in zip(events, events[1:]) if b - a > cap + 1e-6 and (a, b) not in stuck),
+                        None)
         if not long_gap:
             break
         a, b = long_gap
@@ -587,7 +589,8 @@ def _pace_plan(parts, words_out, payoff_out, payoff_start, crop_w, cap=_PACE_CAP
             if guard and guard[0] < t < guard[1]:
                 t = guard[0] - 0.05
             if t - a < 0.5 or b - t < 0.5:
-                break
+                stuck.add((a, b))           # nothing fits in this one; the others still get filled
+                continue
         adds.append(round(t, 3))
     adds = sorted(set(adds))
     events_after0 = sorted(hard + adds)
