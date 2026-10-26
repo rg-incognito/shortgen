@@ -222,6 +222,8 @@ CAMPAIGNS = {
         # Women 18-34: US evening + late night in bed (21:30 was the only 100% tier-1 slot).
         'publish_slots_et': ['19:00', '21:30'],
         'title_names':     ['Love Is Blind'],
+        # Whisper hints (transcriber initial_prompt / hotwords): names and terms it mishears.
+        'hotwords':        ['Love Is Blind', 'the pods', 'fiancé', 'engagement'],
         'genre':           'reality',
         # Brief: original sound (music stays off). Added overlay text and a handle are not
         # confirmed as allowed, so only today's header is shown.
@@ -277,6 +279,10 @@ CAMPAIGNS = {
         # Self-improvement: evening wind-down scroll (the 7 AM ET slot seeded India).
         'publish_slots_et': ['20:00'],
         'title_names':     ['Mark Manson'],
+        # Whisper hints (transcriber initial_prompt / hotwords): names and terms it mishears.
+        # (Whisper wrote "loss aversion" as "LOSSA VERSION".)
+        'hotwords':        ['Mark Manson', 'Solved', 'loss aversion', 'dopamine', 'self-improvement',
+                            'cognitive bias'],
         'genre':           'podcast',
         # No on-screen text and ST openers (1 point): 8/12 reachable is the bar, not 11/16.
         'min_rubric':      8,
@@ -328,6 +334,8 @@ CAMPAIGNS = {
         # Relationship drama: after-dinner scroll.
         'publish_slots_et': ['19:30'],
         'title_names':     ['Zach Justice', 'Love & Justice', 'Love and Justice', 'HardScope'],
+        # Whisper hints (transcriber initial_prompt / hotwords): names and terms it mishears.
+        'hotwords':        ['Zach Justice', 'HardScope', 'Love and Justice'],
         'genre':           'reality',
         'render':          _render('A', names=['Zach']),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/3b59058d-81d1-489b-bf54-97375caa10ad',
@@ -367,6 +375,9 @@ CAMPAIGNS = {
         # Collectibles, younger male audience: late evening.
         'publish_slots_et': ['21:00'],
         'title_names':     ['Unpacked', 'MatCrackz', 'Steve Aoki', 'YourRAGE', 'David Dobrik', 'HardScope'],
+        # Whisper hints (transcriber initial_prompt / hotwords): names and terms it mishears.
+        'hotwords':        ['MatCrackz', 'Steve Aoki', 'YourRAGE', 'David Dobrik', 'HardScope', 'Pokémon',
+                            'PSA 10', 'booster pack', 'trading cards'],
         'genre':           'talk',
         'min_rubric':      8,       # no on-screen text: 8 of the 12 reachable points
         # The brief rewards "fast-paced" editing and rejects "weak/lazy editing": the full edit layer.
@@ -415,6 +426,8 @@ CAMPAIGNS = {
         'publish_slots_et': ['18:30'],
         # Real names only, never the brand (the brief wants it to look organic).
         'title_names':     ['IShowSpeed', 'Jay Cutler', 'Phil Heath'],
+        # Whisper hints (transcriber initial_prompt / hotwords): names and terms it mishears.
+        'hotwords':        ['IShowSpeed', 'Speed', 'Jay Cutler', 'Phil Heath', 'Mr. Olympia'],
         'genre':           'talk',
         'min_rubric':      8,       # no on-screen text: 8 of the 12 reachable points
         # Brief: must look organic: no @, no brand, no added text beyond captions.
@@ -458,6 +471,8 @@ CAMPAIGNS = {
         # Skate / comedy crowd: late-evening scroll.
         'publish_slots_et': ['22:00'],
         'title_names':     ['Tony Hawk', 'Bam Margera', 'Tony Stock'],
+        # Whisper hints (transcriber initial_prompt / hotwords): names and terms it mishears.
+        'hotwords':        ['Tony Hawk', 'Bam Margera', 'Tony Stock', 'Ramp'],
         'cast_names':      ['Tony', 'Bam', 'Hawk', 'Margera'],
         'genre':           'sitcom',
         # Brief allows our own framing as long as it tells the Tony and Bam story and nothing
@@ -527,6 +542,9 @@ CAMPAIGNS = {
         # Career millennials with young kids: after bedtime, US evening.
         'publish_slots_et': ['20:30'],
         'title_names':     ['BILF Podcast', 'Mara Dorne', 'Suneera Madhani', 'Alli Webb', 'Andrea Carmona'],
+        # Whisper hints (transcriber initial_prompt / hotwords): names and terms it mishears.
+        'hotwords':        ['BILF', 'Mara Dorne', 'Suneera Madhani', 'Alli Webb', 'Andrea Carmona',
+                            'founder', 'entrepreneur'],
         'cast_names':      ['Mara', 'Dorne', 'Suneera', 'Madhani', 'Alli', 'Webb', 'Andrea', 'Carmona',
                             'Stax', 'Drybar', 'BILF'],
         'genre':           'podcast',
@@ -646,6 +664,8 @@ CAMPAIGNS = {
         # second daily Short (the slot the stopped Friends posts used to take).
         'publish_slots_et': ['22:30', '23:15'],
         'title_names':     ['John Cena', 'Jessica Biel', 'LADbible'],
+        # Whisper hints (transcriber initial_prompt / hotwords): names and terms it mishears.
+        'hotwords':        ['John Cena', 'Jessica Biel', 'LADbible', 'Snack Wars'],
         'cast_names':      ['John', 'Cena', 'Jessica', 'Biel', 'LADbible'],
         # A celebrity sit-down / game with two talkers: the talk niche (B1 full-bleed, talk captions).
         'genre':           'talk',
@@ -725,6 +745,8 @@ CAMPAIGNS = {
         # 18:45 is a second daily Short (the earliest slot inside the window in both EST and EDT is 18:30).
         'publish_slots_et': ['18:45', '19:45'],
         'title_names':     ['milkXP'] + _MILKXP_CREATORS,
+        # Whisper hints (transcriber initial_prompt / hotwords): names and terms it mishears.
+        'hotwords':        ['milkXP', 'Ben Azelart', 'Mr. Greg', '50/30/20 rule', 'student lounge', 'budget'],
         'cast_names':      list(_MILKXP_CAST),
         # A creator challenge show: reality-like entertainment (niche A, A1 with a header band).
         'genre':           'reality',
@@ -849,6 +871,49 @@ def publish_plan(profile, now=None, slot=None):
 def next_publish_time(profile, now=None, slot=None):
     """Next publishAt (UTC ISO 'Z') for the profile's slots, or None (see publish_plan)."""
     return publish_plan(profile, now, slot)[0]
+
+
+# --- Whisper (BACKLOG P0-4) ------------------------------------------------------
+# Talk / podcast campaigns are English speech end to end: an English-only model of the same
+# size transcribes names and terms better. TALK_WHISPER_MODEL is the preferred model, the run's
+# WHISPER_MODEL stays as the fallback (transcriber.transcribe_video tries them in order).
+TALK_GENRES = ('talk', 'podcast')
+TALK_WHISPER_MODEL = 'medium.en'
+_WHISPER_PROMPT_MAX = 400     # characters; Whisper's prompt window is ~224 tokens
+
+
+def whisper_hints(profile):
+    """(initial_prompt, hotwords) from the profile's hotwords + title_names + cast_names, or (None, None)."""
+    terms, seen = [], set()
+    for t in (list(profile.get('hotwords') or []) + list(profile.get('title_names') or [])
+              + list(profile.get('cast_names') or [])):
+        t = (t or '').strip()
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            terms.append(t)
+    if not terms:
+        return None, None
+    while terms and len(', '.join(terms)) > _WHISPER_PROMPT_MAX - 20:
+        terms.pop()
+    joined = ', '.join(terms)
+    return f"Names and terms: {joined}.", joined
+
+
+def whisper_models(profile, default, talk_model=None):
+    """
+    Models to try, best first. Talk campaigns get TALK_WHISPER_MODEL (env WHISPER_TALK_MODEL
+    overrides it; '' or 'off' turns it off) ahead of the run's default, unless the default is
+    already a large model.
+    """
+    import os
+    default = (default or 'small').strip()
+    if talk_model is None:
+        talk_model = os.environ.get('WHISPER_TALK_MODEL', TALK_WHISPER_MODEL)
+    talk_model = (talk_model or '').strip()
+    if (profile.get('genre') in TALK_GENRES and talk_model and talk_model.lower() != 'off'
+            and talk_model != default and not default.startswith(('large', 'distil-large'))):
+        return [talk_model, default]
+    return [default]
 
 
 def get_campaign(name):

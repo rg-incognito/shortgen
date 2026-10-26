@@ -59,6 +59,37 @@ def add_to_playlist(video_id, playlist_title):
     return playlist_id
 
 
+def own_schedule(svc=None, max_videos=50):
+    """
+    Publish times of this channel's most recent uploads (read only, ~3 quota units):
+    [{'video_id', 'title', 'when' (ISO), 'state': 'scheduled' | 'public'}]. A scheduled
+    private video has status.publishAt; a public one counts at snippet.publishedAt.
+    Private / unlisted videos with no publishAt never go out and are left out.
+    """
+    svc = svc or _build_svc()
+    ch = svc.channels().list(part='contentDetails', mine=True).execute()
+    items = ch.get('items') or []
+    if not items:
+        return []
+    uploads = items[0]['contentDetails']['relatedPlaylists']['uploads']
+    pl = svc.playlistItems().list(part='contentDetails', playlistId=uploads,
+                                  maxResults=min(max_videos, 50)).execute()
+    ids = [i['contentDetails']['videoId'] for i in pl.get('items', [])]
+    out = []
+    if not ids:
+        return out
+    vids = svc.videos().list(part='snippet,status', id=','.join(ids), maxResults=50).execute()
+    for v in vids.get('items', []):
+        status, snippet = v.get('status', {}), v.get('snippet', {})
+        if status.get('publishAt') and status.get('privacyStatus') != 'public':
+            out.append({'video_id': v['id'], 'title': snippet.get('title', ''),
+                        'when': status['publishAt'], 'state': 'scheduled'})
+        elif status.get('privacyStatus') == 'public' and snippet.get('publishedAt'):
+            out.append({'video_id': v['id'], 'title': snippet.get('title', ''),
+                        'when': snippet['publishedAt'], 'state': 'public'})
+    return out
+
+
 def upload_body(title, description, tags_str, publish_at_iso, paid_promotion=False):
     """
     (part, body) for videos.insert. paid_promotion sets the "includes paid

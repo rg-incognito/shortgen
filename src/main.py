@@ -26,9 +26,10 @@ from campaigns import (get_campaign, find_banned, find_transcript_banned, enforc
                        render_config, length_plan, story_max_seconds, layer_caps, rubric_gate, clip_text,
                        assign_variant, apply_variant, EXPERIMENTS, moment_hints, quote_problems, episode_guest,
                        fallback_layer_lines, layer_line_problem, layer_names, faithful_problems, _EMOJI,
-                       clip_type_for_run, clip_type_hint, comments_allowed, edit_config, header_on,
-                       payoff_max_tail)
+                       clip_type_for_run, clip_type_hint, comments_allowed, whisper_hints, whisper_models,
+                       edit_config, header_on, payoff_max_tail)
 from footage import download_from_release, sponsor_segments
+from scheduling import merge_bookings, slot_filled, start_blocked, choose_publish_time
 
 try:   # render side (Coder B); absent until that branch is merged
     import textguard
@@ -792,6 +793,32 @@ def _record_skip(tracker, campaign, episode_name, run, skip):
     print(f"::warning title=Run skipped::{campaign} {episode_name}: {skip}")
 
 
+def _bookings(tracker):
+    """Every publish time of ours (scheduling.merge_bookings): YouTube API + tracker sheet."""
+    yt_items = None
+    try:
+        from youtube_client import own_schedule
+        yt_items = own_schedule()
+    except Exception as e:
+        print(f"::warning title=YouTube schedule unavailable::{e} (slot checks use the tracker sheet only)")
+    try:
+        rows = tracker.get_bookings()
+    except Exception as e:
+        print(f"::warning title=Tracker bookings unavailable::{e}")
+        rows = []
+    return merge_bookings(yt_items, rows)
+
+
+def _transcript_cache_names(episode_name, models, hot):
+    """Cache file names to try, best first. Hotword transcripts get their own key; a campaign
+    that keeps its old model may reuse its old (hotword-free) transcript."""
+    tag = ('_hw' + hashlib.sha1(hot.encode('utf-8')).hexdigest()[:6]) if hot else ''
+    names = [f"{episode_name}_{m}{tag}.json" for m in models]
+    if tag and len(models) == 1:
+        names.append(f"{episode_name}_{models[0]}.json")
+    return names, tag
+
+
 def main():
     campaign, profile = get_campaign(os.environ.get('CAMPAIGN'))
     max_runs = profile['max_runs']
@@ -808,15 +835,6 @@ def main():
 
     tracker = SheetTracker(service_account_info, spreadsheet_id)
 
-    diarization_pipeline = None
-    if hf_token:
-        try:
-            from reframer import load_diarization_pipeline
-            diarization_pipeline = load_diarization_pipeline(hf_token)
-            print('  Diarization pipeline loaded (speaker-aware tracking active)')
-        except Exception as e:
-            print(f'  Diarization pipeline unavailable: {e} — using face-only tracking')
-
     # A campaign with several daily slots gets one cron per slot, each passing
     # PUBLISH_SLOT=HH:MM (ET); without it the run serves whichever slot is next.
     pinned_slot = os.environ.get('PUBLISH_SLOT', '').strip() or None
@@ -828,15 +846,25 @@ def main():
     slot, nominal = publish_plan(profile, slot=pinned_slot)
     # Pinned: only Shorts for this slot (scheduled at or after it) count, not
     # an earlier slot's late publish.
-    not_before = nominal if pinned_slot else None
-    if slot and not video_file_id and tracker.slot_taken({ep for _, ep in profile.get('files', [])}, slot,
-                                                             window_min=SLOT_GUARD_MIN,
-                                                             not_before=not_before):
-        if NO_UPLOAD:
-            print(f"{campaign}: the {slot} slot is taken — rendering anyway (no-upload run)")
-        else:
-            print(f"{campaign}: a Short is already scheduled for the {slot} slot — nothing to do.")
-            sys.exit(0)
+    # The check reads YouTube (every upload on the channel) and the tracker sheet; it runs again
+    # right before the upload, since a late GitHub run and the local fallback can render at once.
+    if slot and not video_file_id:
+        blocked = start_blocked(campaign, profile, nominal, _bookings(tracker), pinned=bool(pinned_slot))
+        if blocked:
+            if NO_UPLOAD:
+                print(f"{campaign} {nominal} slot: {blocked} — rendering anyway (no-upload run)")
+            else:
+                print(f"{campaign} {nominal} slot: {blocked} — nothing to do.")
+                sys.exit(0)
+
+    diarization_pipeline = None
+    if hf_token:
+        try:
+            from reframer import load_diarization_pipeline
+            diarization_pipeline = load_diarization_pipeline(hf_token)
+            print('  Diarization pipeline loaded (speaker-aware tracking active)')
+        except Exception as e:
+            print(f'  Diarization pipeline unavailable: {e} — using face-only tracking')
 
     # Auto-pick if no file ID provided
     if not video_file_id:
@@ -884,23 +912,37 @@ def main():
         print(f"      {video_path.stat().st_size / 1e6:.1f} MB")
 
         # Long campaign episodes get clipped many times — transcribe each one once.
-        cache_name = f"{episode_name}_{whisper_model}.json"
+        # Talk campaigns use an English-only model when the runtime allows it (whisper_models), and
+        # every campaign primes Whisper with its names and terms (BACKLOG P0-4: "LOSSA VERSION").
+        models = whisper_models(profile, whisper_model)
+        initial_prompt, hot = whisper_hints(profile)
+        cache_names, hw_tag = _transcript_cache_names(episode_name, models, hot)
         cached = None
-        try:
-            cached = load_transcript_cache(cache_name, SHORTS_FOLDER_ID)
-        except Exception as e:
-            print(f"      Transcript cache unavailable: {e}")
+        for cache_name in cache_names:
+            try:
+                cached = load_transcript_cache(cache_name, SHORTS_FOLDER_ID)
+            except Exception as e:
+                print(f"      Transcript cache unavailable: {e}")
+                break
+            if cached:
+                break
         if cached:
             segments, all_words = cached['segments'], cached['words']
-            print(f"[2/5] Using cached transcript ({len(segments)} segments, {len(all_words)} words)")
+            print(f"[2/5] Using cached transcript {cache_name} ({len(segments)} segments, {len(all_words)} words)")
         else:
-            print(f"[2/5] Transcribing with whisper-{whisper_model}...")
-            segments, all_words = transcribe_video(str(video_path), model_size=whisper_model)
-            print(f"      {len(segments)} segments, {len(all_words)} words transcribed")
+            print(f"[2/5] Transcribing with whisper-{' -> '.join(models)}"
+                  f"{' (hotwords: ' + hot + ')' if hot else ''}...")
+            info = {}
+            segments, all_words = transcribe_video(str(video_path), model_size=models[0],
+                                                   initial_prompt=initial_prompt, hotwords=hot,
+                                                   fallback_models=models[1:], info=info)
+            used = info.get('model', models[0])
+            print(f"      {len(segments)} segments, {len(all_words)} words transcribed (whisper-{used})")
             try:
                 if NO_UPLOAD:
                     raise RuntimeError('no-upload run writes nothing to Drive')
-                save_transcript_cache(cache_name, SHORTS_FOLDER_ID, segments, all_words)
+                save_transcript_cache(f"{episode_name}_{used}{hw_tag}.json", SHORTS_FOLDER_ID,
+                                      segments, all_words)
             except Exception as e:
                 print(f"      Transcript cache save skipped: {e}")
 
@@ -960,6 +1002,28 @@ def main():
             if dup:
                 raise RuntimeError(f"Refusing to upload: {dup}")
 
+        # Re-check the slot now that the render is done (BACKLOG P0-8b): on 2026-10-25 a late GitHub
+        # run filled MilkXP 18:45 while the local fallback rendered, and the fallback published a
+        # second Short 11 min later. Nothing is uploaded or logged here, so the moment stays unused.
+        publish_at = publish_note = None
+        if yt_meta:
+            bookings = _bookings(tracker)
+            if slot and not video_file_id:
+                filled = slot_filled(campaign, profile, nominal, bookings, pinned=bool(pinned_slot))
+                if filled:
+                    print(f"{campaign}: {filled.get('video_id') or 'a Short'} filled the {nominal} slot "
+                          f"while this run rendered — not uploading.")
+                    return
+            # Never "now": a passed or too-close slot rolls to the next free one, and no two of our
+            # publishes (any campaign) land within MIN_GAP_MIN of each other (P0-6, P0-8c).
+            publish_at, publish_note = choose_publish_time(profile, bookings=bookings, nominal_iso=nominal,
+                                                           campaign=campaign)
+            if publish_at is None:
+                print(f"{campaign}: {publish_note} — not uploading.")
+                return
+            if publish_note != 'slot':
+                print(f"      publishAt {publish_at}: {publish_note}")
+
         print("[5/5] Uploading to Drive...")
         uploaded = upload_shorts([short_path], SHORTS_FOLDER_ID, service_account_info)
         drive_file_id = uploaded[0][1] if uploaded else None
@@ -993,9 +1057,9 @@ def main():
                 print(f"::warning title=Tracker fields not written::{episode_name} run {current_run}: "
                       f"header/variant/QA columns skipped ({e})")
             from youtube_client import upload_scheduled, add_to_playlist
-            # Profiles without slots publish ASAP, but still only in the US-evening window.
-            publish_at = (next_publish_time(profile, slot=pinned_slot)
-                          or window_publish_time(tracker.get_next_publish_slot()))
+            # publish_at was picked right after the render (choose_publish_time): the slot, rolled
+            # forward if needed; profiles without slots go out ASAP inside the US-evening window,
+            # always at least MIN_GAP_MIN from our other Shorts.
             print(f"[5b] Scheduling on YouTube → {publish_at}...")
             # Briefs that require a paid-partnership disclosure set paid_promotion.
             paid_kw = {'paid_promotion': True} if profile.get('paid_promotion') else {}
