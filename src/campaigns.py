@@ -82,9 +82,9 @@ EDIT_FULL = {'length': True, 'pace': True, 'headline': True, 'headline_s': None,
              'sfx_gain_db': 0.0, 'flash': True, 'captions': True, 'hook_rejects': True, 'guest_cut': True,
              'reaction_titles': True}
 # LADbible's real brief is unreadable ("all in Notion"): cuts + headline + SFX on cuts only, no
-# music, no flash, captions and length unchanged. The opener / guest-change rejects are selection
+# music, no flash, captions unchanged; length 13-18 s like the others (P0-1). The opener / guest-change rejects are selection
 # fixes (the spliced-guests Cena Short came from this source), so they stay on.
-EDIT_LIGHT = dict(EDIT_FULL, length=False, sfx='cuts', sfx_gain_db=-3.0, flash=False, captions=False)
+EDIT_LIGHT = dict(EDIT_FULL, sfx='cuts', sfx_gain_db=-3.0, flash=False, captions=False)
 EDIT_OFF = {k: False for k in EDIT_KEYS}
 # P0-1 length for the edit layer (NICHE_LENGTH stays for the other campaigns)
 EDIT_LENGTH = {'target': (13, 18), 'max': 20}
@@ -272,7 +272,7 @@ CAMPAIGNS = {
         # Wide table shots: faces too small to detect -> show the whole shot.
         'wide_fallback':   True,
         # Brief needs 20s+ (the render check allows 1s under min_seconds).
-        'min_seconds':     21.0,
+        'min_seconds':     21.0,     # edit layer: the 13-18 s window moves to 21-22.5 s, cap 24 (brief floor)
         'max_seconds':     40.0,
         'sponsorblock':    True,
         'playlist':        'Solved with Mark Manson',
@@ -370,6 +370,7 @@ CAMPAIGNS = {
         'wide_fallback':   True,
         # Brief needs 7s+; the edit layer aims at 13-18 s (P0-1: the Mewtwo winner ran 11 s).
         'min_seconds':     13.0,
+        'brief_min_seconds': 8.0,     # "Under 7 seconds ... rejected": the edit-layer fallback floor
         'max_seconds':     40.0,
         'playlist':        'Unpacked',
         # Collectibles, younger male audience: late evening.
@@ -1512,8 +1513,8 @@ def length_plan(profile):
     if edit_config(profile).get('length'):
         lo = profile.get('min_seconds') or 12.0
         t_lo = max(EDIT_LENGTH['target'][0], lo)
-        t_hi = max(EDIT_LENGTH['target'][1], t_lo + 2.0)
-        hi = max(EDIT_LENGTH['max'], t_hi + 2.0)
+        t_hi = max(EDIT_LENGTH['target'][1], t_lo + 1.5)
+        hi = max(EDIT_LENGTH['max'], t_hi + 1.5)
         if profile.get('max_seconds'):
             hi = min(hi, profile['max_seconds'])
         return lo, hi, (t_lo, max(t_lo, min(t_hi, hi)))

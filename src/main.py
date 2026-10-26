@@ -341,6 +341,61 @@ def _candidate_problems(story, sents, all_words, used, profile, video_path=None,
     return problems
 
 
+# Edit-layer rules that may be relaxed so a campaign never ends a run with zero Shorts: the
+# P0-3 opener rejects, P0-5 guest change, the on-screen headline rules (the headline is then
+# hidden) and the P0-1 window, down to the pre-edit-layer limits. Everything else stays hard.
+_SOFT_PREFIXES = ('opens mid-sentence', 'opens on an outro', 'opens on an abstract', 'abstract opener',
+                  'opener leans', 'crosses a cut where the guests change')
+
+
+def _soft_problem(p, profile):
+    """(soft?, hides the headline?) for one candidate problem string."""
+    import re as _re
+    from campaigns import NICHE_LENGTH
+    if p.startswith(_SOFT_PREFIXES):
+        return True, False
+    if p.startswith('header ') and 'banned' not in p:
+        # soft only where the header is on screen because of the edit layer (A1 showed it before)
+        legacy = bool(render_config(profile).get('header'))
+        return (not legacy or 'describes the clip' in p), not legacy
+    m = _re.match(r'too short after trimming \(([\d.]+)s', p)
+    if m:
+        return float(m.group(1)) >= float(profile.get('brief_min_seconds') or profile.get('min_seconds') or 0), False
+    m = _re.match(r'too long after trimming \(([\d.]+)s', p)
+    if m:
+        niche = NICHE_LENGTH[render_config(profile).get('niche', 'A')]['max']
+        return float(m.group(1)) <= min(profile.get('max_seconds') or niche, niche), False
+    m = _re.match(r'ends ([\d.]+)s after the payoff', p)
+    if m:
+        return float(m.group(1)) <= PAYOFF_MAX_TAIL, False
+    return False, False
+
+
+def _edit_fallback(candidates, profile, min_score):
+    """
+    The best candidate whose only problems are edit-layer soft rules (and that clears the score
+    gate), marked '_relaxed' (and '_hide_headline' when its header broke an on-screen rule), or None.
+    """
+    best = None
+    for story, problems in candidates:
+        if not problems or story['score'] < min_score:
+            continue
+        judged = [_soft_problem(p, profile) for p in problems]
+        if not all(s for s, _ in judged):
+            continue
+        if best is None or story['score'] > best[0]['score']:
+            best = (story, problems, any(h for _, h in judged))
+    if not best:
+        return None
+    story, problems, hide = best
+    story['_relaxed'] = list(problems)
+    if hide:
+        story['_hide_headline'] = True
+    print(f"::warning title=Edit layer fallback::'{story['storyline_title']}' [{story['score']:.1f}] picked with "
+          f"edit-layer rules relaxed ({'; '.join(problems)})" + (' — headline hidden' if hide else ''))
+    return story
+
+
 def _hook_problems(story, sents, all_words, profile):
     """hook_problems with the edit layer's deterministic opener rejects (P0-3) when it is on."""
     return hook_problems(story, sents, all_words, strict=bool(edit_config(profile).get('hook_rejects')),
@@ -390,6 +445,8 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
         raws = analyze_candidates(sents, gemini_api_key, used_segments=avoid,
                                   used_storylines=used_storylines, campaign=campaign, limits=limits,
                                   target=target, genre=genre, recent_headers=list(prior_headers), **hint_kw)
+        if attempt == 1:
+            everything = []                  # every candidate of every attempt (edit-layer fallback)
         ranked, used = [], list(avoid)   # candidates of one answer may overlap each other
         for raw in raws:
             story, problems = build_candidate(raw, sents, all_words, max_tail=payoff_max_tail(profile))
@@ -417,15 +474,20 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
             for c in story['clips']:
                 c['end_seconds'] = min(c['end_seconds'], src_dur - 0.05)
             dur = edited_duration(story, all_words, profile['silence_thresh'], **dur_kwargs)
-            if edit_config(profile).get('length') and dur > story_max_seconds(story, profile) + 0.05:
-                # P0-1: over the cap -> start later on a clean sentence (the payoff stays last)
-                lo_, hi_ = profile.get('min_seconds') or 0.0, story_max_seconds(story, profile)
-
-                def fits(s):
-                    s['_dur_try'] = edited_duration(s, all_words, profile['silence_thresh'], **dur_kwargs)
-                    return (lo_ <= s['_dur_try'] <= hi_ + 0.05
-                            and not _hook_problems(s, sents, all_words, profile))
-                cut = length_trim(story, sents, all_words, fits)
+            if edit_config(profile).get('length') and dur > target[1] + 0.05:
+                # P0-1: over the target -> start later on a clean sentence (the payoff stays last):
+                # the first start that lands in the target window, else the first under the cap
+                lo_ = profile.get('min_seconds') or 0.0
+                cut = None
+                for hi_ in (target[1], story_max_seconds(story, profile)):
+                    def fits(s, hi_=hi_):
+                        s['_dur_try'] = edited_duration(s, all_words, profile['silence_thresh'], **dur_kwargs)
+                        return (lo_ <= s['_dur_try'] <= hi_ + 0.05
+                                and not _hook_problems(s, sents, all_words, profile))
+                    if dur > hi_ + 0.05:
+                        cut = length_trim(story, sents, all_words, fits)
+                    if cut:
+                        break
                 if cut:
                     a_, k_ = cut['_length_trim']
                     print(f"      ~ {story['storyline_title']}: {dur:.1f}s > {hi_:g}s, starts later S{a_} -> S{k_} "
@@ -456,6 +518,7 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
             avoid += [seg for seg in ((c['start_seconds'], c['end_seconds']) for c in story['clips'])
                       if seg not in avoid]
         ranked.sort(key=lambda sp: sp[0]['score'], reverse=True)
+        everything += ranked
 
         print(f"      Attempt {attempt}: {len(ranked)} candidate(s)")
         for story, problems in ranked:
@@ -481,6 +544,10 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
         if passing and (not best_weak or passing[0]['score'] > best_weak['score']):
             best_weak = passing[0]
 
+    if not best_weak and any(edit_config(profile).get(k) for k in ('hook_rejects', 'guest_cut', 'headline', 'length')):
+        fb = _edit_fallback(everything, profile, min_score)
+        if fb:
+            return fb
     if best_weak:
         err = WeakMomentSkip(f"best usable moment '{best_weak['storyline_title']}' scored "
                              f"{best_weak['score']:.1f} < {min_score:g}")
@@ -734,6 +801,9 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
         story['variant'] = variant
         apply_variant(story, variant)
         render = dict(render, template=variant['template'])
+        if story.get('_hide_headline'):
+            # edit-layer fallback: this header broke an on-screen rule, so no headline on this Short
+            render = dict(render, edit=dict(edit_config(render), headline=False))
         render_kwargs = dict(_render_kwargs(render), **_accepted(create_story_short, qa_retry=qa_retry))
         if render_kwargs and variant['template'] == 'A1' and not edit_config(render).get('headline'):
             story['hook_emoji'] = ''   # the A1 header carries no emoji (the edit headline may carry one)
