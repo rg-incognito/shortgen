@@ -69,7 +69,49 @@ _SEAM_MIN = 0.12
 # {slot 'HH:MM' ET: engine, '*': engine} dict, so one daily slot is the A/B arm.
 _CAPTIONS_ENGINES = ('ass', 'remotion')
 
+# --- Edit layer (render['edit'], campaigns.EDIT_FULL / EDIT_LIGHT; EDIT_SPEC.md) ----------
+# Pace (R1): the first visual cut lands by 2.0 s and no framing is held longer than 3.5 s.
+# Where the source has no camera cut, the cut is a reframe: the same take at a tighter
+# (1.3-1.4x) face-centred crop, toggled back to wide on the next one; a hard cut resets wide.
+_PACE_CAP = 3.5
+_PACE_FIRST_BY = 2.0
+_PACE_FIRST_FROM = 1.0       # the opening line lands before the first cut
+_PACE_MIN_SHOT = 1.0         # a reframe never leaves a shot shorter than this
+_PACE_TARGET = 2.4           # preferred reframe spacing (winners' median shot is 2.2 s)
+_PACE_PAYOFF_GUARD = 0.5     # no reframe in the last 0.5 s before the payoff word
+_REFRAME_HI, _REFRAME_LO = 1.40, 1.30   # close crop (source crop >= / < 900 px wide)
+_REFRAME_ZOOM_MAX = 1.75     # face zoom x reframe level cap (720p sources stay readable)
+# Flash (R6): a warm wash peaking (0.85) on the first frame after the cut, rising over
+# 0.08 s and falling over 0.22 s (<= 0.35 s in all), at the biggest beat change only.
+_FLASH_PEAK, _FLASH_RISE, _FLASH_FALL = 0.85, 0.08, 0.22
+_FLASH_SECOND_MIN_S = 10.0   # a second flash only on a clip this long, at a story-clip join
+_FLASH_GAP_S = 3.0
+# SFX (R5): files from assets/sfx (own-work / CC0, assets/sfx/LICENSES.md). Levels are the
+# peak 50 ms RMS relative to the clip's median speech RMS; under any word the SFX is ducked
+# to <= _SFX_UNDER_SPEECH so it never masks a word, and the original audio is never replaced.
+_SFX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'assets', 'sfx')
+_SFX = {
+    # kind: (file, level dB re voice, window before / after the file's peak (s), fade-out s)
+    'whoosh':  ('whoosh_1_short.wav', -8.0, 0.24, 0.14, 0.06),
+    'whoosh2': ('whoosh_2_medium.wav', -8.0, 0.24, 0.14, 0.06),
+    'flash':   ('swoosh_transition_1_up.wav', -8.0, 0.30, 0.10, 0.06),
+    'pop':     ('pop_1_bubble.wav', -9.0, 0.02, 0.10, 0.02),
+    'boom':    ('boom_1_bass_hit.wav', -4.0, 0.0, 0.60, 0.25),
+}
+_SFX_UNDER_SPEECH = -14.0    # dB re voice: the most an SFX may play while a word is spoken
+_SFX_SPEECH_PAD = 0.03
+_SFX_RATE = {'full': 1.6, 'cuts': 1.2}   # SFX per 10 s (spec 1-2, max 3)
+_SFX_GAP_S = 3.0             # between two SFX (the frame-0 pop excepted)
+_SFX_PAIR_GAP_S = 0.8        # ...except the flash swoosh into the payoff boom
+_SFX_MIN_SPEECH_GAP = 0.08   # cut SFX sit in a speech gap at least this long
+# Music bed (R4): built but off (allow_music False until licensed tracks exist).
+_BED_DB, _BED_DUCK_DB = -16.0, 4.0
+_BED_ATTACK, _BED_RELEASE = 0.03, 0.25
+_BED_FADE_IN, _BED_FADE_OUT = 0.3, 0.5
+_MUSIC_LICENSES = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'music', 'LICENSES.json')
+
 _SENTENCE_END = re.compile(r'[.!?]["\')\]]*$')
+_PHRASE_END = re.compile(r'[,;:]["\')\]]*$')
 
 
 def _split_by_speech(clip_start, clip_end, all_words, silence_thresh=_SILENCE_THRESH,
@@ -198,10 +240,28 @@ def _render_config(render, story, wide_fallback=False):
     tail = float(render.get('tail_s') or (_TAIL_A if niche == 'A' else _TAIL_B))
     names = {str(n).upper() for n in (render.get('names') or [])}
     names |= {str(k).upper() for k in (story.get('keywords') or [])}
+    edit = _edit_config(render)
+    if edit.get('headline') and template == 'B1':
+        template = 'B1H'            # full-bleed under a blurred headline band
+    sfx_mode = edit.get('sfx') if edit.get('sfx') in ('full', 'cuts') else None
+    if sfx_mode == 'full' and variant.get('sfx') == 'off' and render.get('allow_sfx'):
+        sfx_mode = None             # an SFX experiment arm switched it off
+    if sfx_mode == 'full':
+        boom = False                # the payoff boom is part of the edit layer's SFX plan
     return {
         'niche': niche, 'template': template,
-        'caption_preset': render.get('caption_preset') or ('tv' if niche == 'A' else 'talk'),
-        'header': bool(render.get('header', template == 'A1')),
+        'caption_preset': ('edit' if edit.get('captions') else
+                           render.get('caption_preset') or ('tv' if niche == 'A' else 'talk')),
+        'header': bool(render.get('header', template == 'A1')) or bool(edit.get('headline')),
+        # edit layer: the hook headline look (keywords coloured, one emoji), pace, flash, SFX
+        'headline': bool(edit.get('headline')),
+        'headline_s': edit.get('headline_s'),
+        'pace': bool(edit.get('pace')),
+        'flash': bool(edit.get('flash')),
+        'sfx_mode': sfx_mode,
+        'sfx_gain_db': float(edit.get('sfx_gain_db') or 0.0),
+        'hook_qa': bool(edit.get('hook_rejects')),
+        'edit_captions': bool(edit.get('captions')),
         'overlays': bool(render.get('overlays_allowed', True)) and variant.get('overlay', 'on') != 'off',
         'handle': render.get('handle'),
         # A brief-required label ("BILF Podcast" for the whole clip) is kept through the
@@ -216,7 +276,8 @@ def _render_config(render, story, wide_fallback=False):
         'tail_s': tail,
         'max_hold': _MAX_HOLD_A if niche == 'A' else max(tail, _MAX_HOLD_B),
         'reaction_cut': niche == 'A',
-        'shot_cap': render.get('shot_cap_s', _SHOT_CAP_S if niche == 'A' else _SHOT_CAP_B),
+        'shot_cap': (_PACE_CAP if edit.get('pace') else
+                     render.get('shot_cap_s', _SHOT_CAP_S if niche == 'A' else _SHOT_CAP_B)),
         # talk: hold the tail over the next speaker's first word (audio faded)
         'hold_over': niche == 'B',
         'boom': boom, 'music': music,
@@ -225,6 +286,15 @@ def _render_config(render, story, wide_fallback=False):
         'loop_seam': bool(render.get('loop_seam', True)),
         'captions_engine': captions_engine(render.get('captions_engine')),
     }
+
+
+def _edit_config(render):
+    """campaigns.edit_config for a render dict (every edit item off when it has no 'edit')."""
+    try:
+        from campaigns import edit_config
+    except Exception:
+        return {}
+    return edit_config(render or {})
 
 
 def _run_slot():
@@ -417,6 +487,415 @@ def _punch_plan(parts, words_out, payoff_out, crop_w, push_from, cap=_SHOT_CAP_S
     return stretches, toggles
 
 
+def _payoff_sentence_start(words_out, payoff_out):
+    """Output time the payoff sentence starts (the word after the last sentence end before the
+    payoff word), or None."""
+    if payoff_out is None or not words_out:
+        return None
+    k = max((i for i, w in enumerate(words_out) if w['start'] <= payoff_out - 0.01), default=None)
+    if k is None:
+        return None
+    for i in range(k - 1, -1, -1):
+        if _SENTENCE_END.search(words_out[i]['word'].strip()):
+            return words_out[i + 1]['start']
+    return words_out[0]['start']
+
+
+def _pace_candidates(parts, words_out):
+    """[(t, priority)] places a reframe cut may land: sentence ends 3, phrase ends and
+    silence-trim joins 2, other pauses >= 80 ms 1, any word boundary 0."""
+    cands = [(p['off'], 2) for k, p in enumerate(parts) if k and not p.get('join_cut')]
+    for a, b in zip(words_out, words_out[1:]):
+        mid = (a['end'] + b['start']) / 2
+        gap = b['start'] - a['end']
+        word = a['word'].strip()
+        if _SENTENCE_END.search(word):
+            cands.append((mid, 3))
+        elif _PHRASE_END.search(word) or gap >= 0.25:
+            cands.append((mid, 2))
+        elif gap >= 0.08:
+            cands.append((mid, 1))
+        elif gap >= -0.01:
+            cands.append((mid, 0))
+    return sorted(cands)
+
+
+def _pace_plan(parts, words_out, payoff_out, payoff_start, crop_w, cap=_PACE_CAP, first_by=_PACE_FIRST_BY):
+    """
+    Edit-layer pace (EDIT_SPEC R1). Hard cuts (source camera cuts and story-clip joins
+    that are real cuts) stay; reframe cuts are added so that:
+      - a cut lands at the payoff sentence's start (the beat the flash marks), unless a
+        hard cut is already within 0.6 s of it;
+      - the first cut lands by first_by (2.0 s), not before _PACE_FIRST_FROM;
+      - no framing is held longer than cap (3.5 s); spacing aims at _PACE_TARGET and never
+        leaves a shot under _PACE_MIN_SHOT; no cut in the last 0.5 s before the payoff word.
+    Reframe cuts prefer sentence ends, then phrase ends / joins / pauses, then any word
+    boundary, then (no boundary at all) a mid-word time: the audio runs on, only the crop
+    changes. Level per stretch between hard cuts starts wide (1.0) and flips to close
+    (_REFRAME_HI, or _REFRAME_LO on a source crop under 900 px) and back on each reframe.
+    Returns (stretches, toggles [(t, level)], marks {'payoff_cut', 'first_cut', 'hard'}).
+    """
+    total = parts[-1]['off'] + parts[-1]['dur']
+    hard = {c for p in parts for c in p['cuts']}
+    hard |= {p['off'] for k, p in enumerate(parts) if k and p.get('join_cut')}
+    hard = sorted(c for c in hard if 0.05 < c < total - 0.05)
+    cands = _pace_candidates(parts, words_out)
+    guard = ((payoff_out - _PACE_PAYOFF_GUARD, payoff_out + 0.05) if payoff_out is not None else None)
+    adds, marks = [], {'payoff_cut': None, 'first_cut': None, 'hard': hard}
+
+    def free(t, lo_gap=_PACE_MIN_SHOT):
+        events = [0.0, total] + hard + adds
+        return all(abs(t - e) >= lo_gap - 1e-6 for e in events) and not (guard and guard[0] < t < guard[1])
+
+    def best(lo, hi, aim):
+        pool = [(t, pr) for t, pr in cands if lo <= t <= hi and free(t)]
+        if not pool:
+            return None
+        return max(pool, key=lambda c: (c[1], -abs(c[0] - aim)))[0]
+
+    # 1. the cut into the payoff sentence
+    if payoff_start is not None and payoff_start >= _PACE_FIRST_FROM:
+        near_hard = [c for c in hard if abs(c - payoff_start) <= 0.6]
+        if near_hard:
+            marks['payoff_cut'] = min(near_hard, key=lambda c: abs(c - payoff_start))
+        else:
+            t = best(payoff_start - 0.35, payoff_start + 0.2, payoff_start)
+            if t is None and free(payoff_start - 0.04, 0.8):
+                t = payoff_start - 0.04
+            if t is not None:
+                adds.append(round(t, 3))
+                marks['payoff_cut'] = round(t, 3)
+    # 2. the first cut by first_by
+    if not any(0.0 < e <= first_by for e in hard + adds):
+        t = best(_PACE_FIRST_FROM, first_by, 1.6)
+        if t is None:
+            t = next((x for x in (first_by - 0.1, 1.5, 1.2) if free(x, 0.8)), None)
+        if t is not None:
+            adds.append(round(t, 3))
+    # 3. no framing held longer than cap
+    while True:
+        events = sorted({0.0, total, *hard, *adds})
+        long_gap = next(((a, b) for a, b in zip(events, events[1:]) if b - a > cap + 1e-6), None)
+        if not long_gap:
+            break
+        a, b = long_gap
+        lo, hi = a + _PACE_MIN_SHOT, min(a + cap, b - _PACE_MIN_SHOT)
+        t = best(lo, hi, a + _PACE_TARGET) if lo <= hi else None
+        if t is None:
+            # nothing on a boundary: the cap wins (a mid-word reframe; the audio runs on)
+            t = a + min(cap, (b - a) / 2.0) if (b - a) < 2 * cap else a + _PACE_TARGET
+            if guard and guard[0] < t < guard[1]:
+                t = guard[0] - 0.05
+            if t - a < 0.5 or b - t < 0.5:
+                break
+        adds.append(round(t, 3))
+    adds = sorted(set(adds))
+    events_after0 = sorted(hard + adds)
+    marks['first_cut'] = events_after0[0] if events_after0 else None
+    hi_level = _REFRAME_HI if crop_w >= 900 else _REFRAME_LO
+    bounds = [0.0] + hard + [total]
+    stretches = list(zip(bounds, bounds[1:]))
+    toggles = []
+    for s, e in stretches:
+        level = 1.0
+        for t in adds:
+            if s < t < e:
+                level = hi_level if level == 1.0 else 1.0
+                toggles.append((t, level))
+    return stretches, toggles, marks
+
+
+def _flash_times(marks, parts, payoff_out, total):
+    """Edit-layer flash cuts (EDIT_SPEC R6): the cut into the payoff (the biggest beat change),
+    plus, on a clip >= 10 s, one story-clip join (a time jump) at least 3 s away. At most 2."""
+    out = []
+    t1 = marks.get('payoff_cut')
+    if t1 is None and payoff_out is not None:
+        before = [c for c in marks.get('hard') or [] if payoff_out - 3.0 <= c <= payoff_out]
+        t1 = max(before) if before else None
+    if t1 is not None and 0.5 <= t1 <= total - 0.3:
+        out.append(t1)
+    if total >= _FLASH_SECOND_MIN_S:
+        joins = [p['off'] for k, p in enumerate(parts) if k and p.get('join_cut') and p['clip'] != parts[k - 1]['clip']]
+        joins = [t for t in joins if 1.0 <= t <= total - 1.0 and all(abs(t - o) >= _FLASH_GAP_S for o in out)]
+        if joins:
+            out.append(joins[0])
+    return sorted(out)[:2]
+
+
+def _flash_frames(part, flashes):
+    """{frame: opacity} of the flash wash on one part (frame centres, the cut frame at the peak)."""
+    fps = part['fps']
+    n = int(round(part['dur'] * fps))
+    out = {}
+    for T in flashes:
+        if not (part['off'] - _FLASH_FALL - 0.1 <= T <= part['off'] + part['dur'] + _FLASH_RISE + 0.1):
+            continue
+        for f in range(n):
+            k = math.floor((part['off'] + (f + 0.5) / fps - T) * fps)
+            if k >= 0:
+                a = _FLASH_PEAK * (1.0 - k / (fps * _FLASH_FALL))
+            else:
+                a = _FLASH_PEAK * (1.0 + k / (fps * _FLASH_RISE))
+            if a > 0.01:
+                out[f] = round(max(out.get(f, 0.0), a), 3)
+    return out
+
+
+def _speech_spans(words_out, pad=_SFX_SPEECH_PAD):
+    return [(w['start'] - pad, w['end'] + pad) for w in words_out]
+
+
+def _speech_gap_at(t, words_out):
+    """Length of the speech pause containing t (0.0 when t is inside a word)."""
+    prev_end, nxt = 0.0, None
+    for w in words_out:
+        if w['start'] <= t <= w['end']:
+            return 0.0
+        if w['end'] <= t:
+            prev_end = max(prev_end, w['end'])
+        elif nxt is None or w['start'] < nxt:
+            nxt = w['start']
+    return (nxt if nxt is not None else t + 1.0) - prev_end
+
+
+def _sfx_plan(cfg, total, words_out, cuts, payoff_out, flashes, headline):
+    """
+    Edit-layer SFX events (EDIT_SPEC R5), output seconds: [{'t' (where the file's peak lands),
+    'kind', 'why'}]. 'full': a pop on the headline at frame 0, a low boom 40 ms after the payoff
+    word, whooshes on cuts; 'cuts' (LADbible light): whooshes on cuts only. About 1.6 (full) /
+    1.2 (cuts) per 10 s, never two within 3 s (the frame-0 pop aside), cut SFX only in a speech
+    pause of >= 80 ms; a flash cut gets the transition swoosh.
+    """
+    mode = cfg.get('sfx_mode')
+    if not mode or total <= 0:
+        return []
+    budget = max(1, int(round(_SFX_RATE[mode] * total / 10.0)))
+    budget = min(budget, int(3 * total / 10.0) or 1)
+    out = []
+    if mode == 'full' and headline:
+        out.append({'t': 0.0, 'kind': 'pop', 'why': 'headline'})
+    if mode == 'full' and payoff_out is not None and payoff_out + 0.3 < total:
+        out.append({'t': round(payoff_out + 0.04, 3), 'kind': 'boom', 'why': 'payoff'})
+    counted = lambda: sum(1 for e in out if e['why'] != 'headline')
+    flash_set = {round(f, 3) for f in flashes}
+    ranked = sorted(((c, round(c, 3) in flash_set) for c in cuts if 0.5 <= c <= total - 0.3),
+                    key=lambda x: (not x[1], -_speech_gap_at(x[0], words_out)))
+    k = 0
+    for c, is_flash in ranked:
+        if counted() >= budget:
+            break
+        if not is_flash and _speech_gap_at(c, words_out) < _SFX_MIN_SPEECH_GAP:
+            continue
+        # the flash swoosh leads into the payoff boom (a pair, >= 0.8 s apart); otherwise 3 s apart
+        if any(abs(c - e['t']) < (_SFX_PAIR_GAP_S if is_flash and e['kind'] == 'boom' else _SFX_GAP_S)
+               for e in out if e['why'] != 'headline'):
+            continue
+        kind = 'flash' if is_flash else ('whoosh', 'whoosh2')[k % 2]
+        k += 0 if is_flash else 1
+        out.append({'t': round(c, 3), 'kind': kind, 'why': 'flash cut' if is_flash else 'cut'})
+    return sorted(out, key=lambda e: e['t'])
+
+
+def _read_wav(path):
+    """(float32 [n, 2] in -1..1, rate) of a 16-bit PCM WAV (clipper's own _build_audio output)."""
+    import wave
+    import numpy as np
+    with wave.open(path, 'rb') as w:
+        ch, rate, width, n = w.getnchannels(), w.getframerate(), w.getsampwidth(), w.getnframes()
+        raw = w.readframes(n)
+    if width != 2:
+        raise ValueError(f'{path}: {8 * width}-bit WAV, expected 16-bit')
+    a = np.frombuffer(raw, np.int16).astype(np.float32).reshape(-1, ch) / 32768.0
+    if ch == 1:
+        a = np.repeat(a, 2, axis=1)
+    return a[:, :2], rate
+
+
+def _write_wav(path, a, rate):
+    import wave
+    import numpy as np
+    pcm = (np.clip(a, -1.0, 1.0) * 32767.0).astype(np.int16)
+    tmp = path + '.tmp.wav'
+    with wave.open(tmp, 'wb') as w:
+        w.setnchannels(pcm.shape[1])
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm.tobytes())
+    os.replace(tmp, path)
+
+
+def _load_sfx(name, rate):
+    """A kit file as float32 [n, 2] at `rate` (ffmpeg decodes the 24-bit WAV)."""
+    import numpy as np
+    path = os.path.join(_SFX_DIR, name)
+    p = subprocess.run(['ffmpeg', '-v', 'error', '-i', path, '-ac', '2', '-ar', str(rate), '-f', 'f32le', '-'],
+                       capture_output=True)
+    if p.returncode != 0 or not p.stdout:
+        raise FileNotFoundError(f'SFX file unreadable: {path}')
+    return np.frombuffer(p.stdout, np.float32).reshape(-1, 2).copy()
+
+
+def _rms_db(a, rate, win=0.05):
+    """dB of the 50 ms RMS frames of a [n, 2] signal (mono sum)."""
+    import numpy as np
+    m = a.mean(axis=1)
+    n = max(1, int(rate * win))
+    k = len(m) // n
+    if k == 0:
+        return np.array([20 * math.log10(max(1e-9, float(np.sqrt(np.mean(m * m)))))])
+    fr = m[:k * n].reshape(k, n)
+    return 20 * np.log10(np.maximum(1e-9, np.sqrt((fr * fr).mean(axis=1))))
+
+
+def voice_level_db(audio, rate, words_out):
+    """Median 50 ms RMS (dB) over the spoken words: the reference every SFX / bed level is set against."""
+    import numpy as np
+    db = _rms_db(audio, rate)
+    win = 0.05
+    vals = [db[i] for w in words_out for i in range(int(w['start'] / win), int(w['end'] / win))
+            if 0 <= i < len(db)]
+    vals = [v for v in vals if v > -60]
+    return float(np.median(vals)) if vals else float(np.percentile(db, 75))
+
+
+def _speech_mask(n, rate, words_out, pad=_SFX_SPEECH_PAD, ramp=0.02):
+    """[n] 0..1: 1 while a word is spoken (+-pad), with ramp-s edges."""
+    import numpy as np
+    m = np.zeros(n, np.float32)
+    for s, e in _speech_spans(words_out, pad):
+        m[max(0, int(s * rate)):max(0, min(n, int(e * rate)))] = 1.0
+    r = max(1, int(ramp * rate))
+    if r > 1 and n > r:
+        m = np.convolve(m, np.ones(r, np.float32) / r, mode='same')
+    return np.clip(m, 0.0, 1.0)
+
+
+def _sfx_clip(kind, rate):
+    """(trimmed float32 [n, 2], peak offset s, peak 50 ms RMS dB) of one SFX kind."""
+    import numpy as np
+    name, _, before, after, fade = _SFX[kind]
+    a = _load_sfx(name, rate)
+    env = np.abs(a).mean(axis=1)
+    k = max(1, int(0.01 * rate))
+    smooth = np.convolve(env, np.ones(k) / k, mode='same')
+    peak = int(np.argmax(smooth)) if kind != 'boom' else int(np.argmax(env > env.max() * 0.2))
+    s, e = max(0, peak - int(before * rate)), min(len(a), peak + int(after * rate))
+    clip = a[s:e].copy()
+    fi = min(len(clip), max(1, int(0.005 * rate)))
+    clip[:fi] *= np.linspace(0, 1, fi, dtype=np.float32)[:, None]
+    fo = min(len(clip), max(1, int(fade * rate)))
+    clip[-fo:] *= np.linspace(1, 0, fo, dtype=np.float32)[:, None]
+    return clip, (peak - s) / rate, float(_rms_db(clip, rate, 0.05).max())
+
+
+def mix_sfx(audio, rate, events, words_out, gain_db=0.0):
+    """
+    The SFX events mixed UNDER the original audio (which is kept as it is). Each SFX is set to
+    its level relative to the voice (median speech RMS) plus gain_db, and while a word is
+    spoken it is ducked to at most _SFX_UNDER_SPEECH dB re voice, so it never masks a word.
+    Returns (mixed audio, [{'t', 'kind', 'start', 'level_db', 'ducked_db'}]).
+    """
+    import numpy as np
+    if not events:
+        return audio, []
+    voice = voice_level_db(audio, rate, words_out)
+    mask = _speech_mask(len(audio), rate, words_out)
+    track = np.zeros_like(audio)
+    log = []
+    cache = {}
+    for ev in events:
+        kind = ev['kind']
+        if kind not in cache:
+            cache[kind] = _sfx_clip(kind, rate)
+        clip, peak_off, peak_db = cache[kind]
+        level = _SFX[kind][1] + gain_db
+        g = 10 ** ((voice + level - peak_db) / 20.0)
+        duck = min(0.0, _SFX_UNDER_SPEECH - level)          # extra attenuation under a word
+        start = int(round((ev['t'] - peak_off) * rate))
+        s0, s1 = max(0, start), min(len(audio), start + len(clip))
+        if s1 <= s0:
+            continue
+        seg = clip[s0 - start:s1 - start] * g
+        dk = 1.0 - mask[s0:s1] * (1.0 - 10 ** (duck / 20.0))
+        track[s0:s1] += seg * dk[:, None]
+        log.append({'t': ev['t'], 'kind': kind, 'why': ev.get('why'), 'start': round(s0 / rate, 3),
+                    'level_db': round(level, 1), 'ducked_db': round(duck, 1)})
+    out = audio + track
+    peak = float(np.abs(out).max()) if len(out) else 0.0
+    if peak > 0.99:
+        out *= 0.99 / peak          # the final loudnorm sets the level; never clip here
+    return out, log
+
+
+def _add_sfx(audio_wav, events, words_out, gain_db=0.0):
+    """mix_sfx on clipper's audio WAV in place. Returns the event log ([] when nothing was mixed)."""
+    if not events:
+        return []
+    audio, rate = _read_wav(audio_wav)
+    mixed, log = mix_sfx(audio, rate, events, words_out, gain_db)
+    if log:
+        _write_wav(audio_wav, mixed, rate)
+    return log
+
+
+def duck_bed(voice, bed, rate, words_out, bed_db=_BED_DB, duck_db=_BED_DUCK_DB, attack=_BED_ATTACK,
+             release=_BED_RELEASE, fade_in=_BED_FADE_IN, fade_out=_BED_FADE_OUT):
+    """
+    The music-bed mixer (EDIT_SPEC R4): bed (looped / cut to the voice's length) at bed_db
+    relative to the voice's median speech RMS, ducked a further duck_db while speech is
+    active (sidechain on the word timings: attack / release time constants), faded in from
+    frame 0 and out at the end. The voice is passed through untouched. Returns the mix.
+    """
+    import numpy as np
+    n = len(voice)
+    if not len(bed):
+        return voice.copy()
+    reps = -(-n // len(bed))
+    bed = np.tile(bed, (reps, 1))[:n].astype(np.float32)
+    v_db = voice_level_db(voice, rate, words_out)
+    b_db = float(np.median(_rms_db(bed, rate)))
+    g = 10 ** ((v_db + bed_db - b_db) / 20.0)
+    # sidechain key = the word timings, followed at a 1 kHz control rate (attack / release)
+    ctl = 1000
+    m = max(1, int(math.ceil(n * ctl / rate)))
+    key = np.zeros(m, np.float32)
+    for w in words_out:
+        key[max(0, int(w['start'] * ctl)):max(0, min(m, int(w['end'] * ctl)))] = 1.0
+    a_c = math.exp(-1.0 / max(1.0, attack * ctl))
+    r_c = math.exp(-1.0 / max(1.0, release * ctl))
+    env_c = np.empty(m, np.float32)
+    cur = 0.0
+    for i in range(m):
+        c = a_c if key[i] > cur else r_c
+        cur = c * cur + (1.0 - c) * float(key[i])
+        env_c[i] = cur
+    env = np.interp(np.arange(n) * ctl / rate, np.arange(m), env_c).astype(np.float32)
+    gain = g * (10 ** (-duck_db * env / 20.0))
+    fi, fo = int(fade_in * rate), int(fade_out * rate)
+    if fi:
+        gain[:fi] *= np.linspace(0, 1, fi, dtype=np.float32)
+    if fo:
+        gain[-fo:] *= np.linspace(1, 0, fo, dtype=np.float32)
+    out = voice + bed * gain[:, None]
+    peak = float(np.abs(out).max())
+    return out * (0.99 / peak) if peak > 0.99 else out
+
+
+def licensed_tracks(path=_MUSIC_LICENSES):
+    """Music tracks cleared for use: music/LICENSES.json entries [{'file', 'license', ...}] only.
+    The two files in music/ have no provenance and are never used (EDIT_SPEC: licensed only)."""
+    import json
+    try:
+        with open(path, encoding='utf-8') as f:
+            items = json.load(f)
+    except (OSError, ValueError):
+        return []
+    root = os.path.dirname(path)
+    return [os.path.join(root, i['file']) for i in items if isinstance(i, dict) and i.get('file')
+            and i.get('license') and os.path.exists(os.path.join(root, i['file']))]
+
+
 def _add_payoff_boom(audio_wav, t_out):
     """
     Flagged experiment (render sfx.payoff_boom, default OFF): one synthesised
@@ -443,16 +922,30 @@ def _add_payoff_boom(audio_wav, t_out):
     return True
 
 
-def _music_bed(audio_wav, cfg):
+def _music_bed(audio_wav, cfg, words_out=None):
     """
-    Hook point for the podcast music bed (BUILD_PLAN #14, soundtrack spec §5):
-    static bed at -14 LU under dialogue, <= 3.5 dB duck, only tracks listed in
-    music/LICENSES.json. Not implemented until licensed tracks exist, so any
-    'bed' / 'ab' setting is logged and skipped; the audio is left untouched.
+    Podcast / talk music bed (EDIT_SPEC R4) through duck_bed: ~16 dB under the voice, a
+    further 4 dB sidechain duck while speech is active, 0.3 s fade in, 0.5 s out. Runs only
+    when the profile allows music (allow_music, today False everywhere) AND a track is listed
+    in music/LICENSES.json; otherwise it is logged and skipped and the audio is untouched.
     """
-    if cfg and cfg.get('music') not in (None, 'off'):
-        print(f"  Music bed '{cfg['music']}' requested but no licensed library is set up — skipped")
-    return False
+    if not cfg or cfg.get('music') in (None, 'off'):
+        return False
+    tracks = licensed_tracks()
+    if not tracks:
+        print(f"  Music bed '{cfg['music']}' requested but no licensed track is listed in music/LICENSES.json — skipped")
+        return False
+    import numpy as np
+    voice, rate = _read_wav(audio_wav)
+    p = subprocess.run(['ffmpeg', '-v', 'error', '-i', tracks[0], '-ac', '2', '-ar', str(rate), '-f', 'f32le', '-'],
+                       capture_output=True)
+    if p.returncode != 0 or not p.stdout:
+        print(f"  Music bed skipped: {tracks[0]} unreadable")
+        return False
+    bed = np.frombuffer(p.stdout, np.float32).reshape(-1, 2)
+    _write_wav(audio_wav, duck_bed(voice, bed, rate, words_out or []), rate)
+    print(f"  Music bed: {os.path.basename(tracks[0])} at {_BED_DB:g} dB re voice, {_BED_DUCK_DB:g} dB duck")
+    return True
 
 
 def create_story_short(video_path, story, output_dir, episode_name,
@@ -536,7 +1029,8 @@ def create_story_short(video_path, story, output_dir, episode_name,
                 stats.append(reframe_clip(video_path, sc_start, sc_end, part_path,
                                           layout=cfg['template'], analysis=plan['analyses'][k],
                                           zoom_events=plan['zoom_events'][k],
-                                          push=plan['push'] if k == plan['push_part'] else None))
+                                          push=plan['push'] if k == plan['push_part'] else None,
+                                          **_edit_part_kwargs(plan, k)))
                 part_paths.append(part_path)
 
         print(f"  Merging {len(part_paths)} parts...")
@@ -558,7 +1052,18 @@ def create_story_short(video_path, story, output_dir, episode_name,
         if cfg and cfg['boom'] and plan.get('payoff_out') is not None:
             if _add_payoff_boom(audio_path, plan['payoff_out']):
                 print(f"  Payoff boom at {plan['payoff_out']:.2f}s (experiment flag)")
-        _music_bed(audio_path, cfg)
+        words_mix = _remap_words(all_words or [], expanded_clips)
+        if cfg and cfg.get('sfx_mode'):
+            events = _sfx_plan(cfg, total, words_mix, plan.get('edit_cuts') or [], plan.get('payoff_out'),
+                               plan.get('flashes') or [], bool(cfg.get('headline') and _headline_text(story, cfg)))
+            try:
+                plan['sfx'] = _add_sfx(audio_path, events, words_mix, cfg.get('sfx_gain_db', 0.0))
+            except Exception as exc:          # an SFX problem never breaks a render
+                print(f"  SFX skipped ({exc})")
+                plan['sfx'] = []
+            if plan['sfx']:
+                print(f"  SFX: {[(e['kind'], e['t']) for e in plan['sfx']]}")
+        _music_bed(audio_path, cfg, words_mix)
         _merge_clips(part_paths, merged_path, audio_path)
 
         out_path = os.path.join(output_dir, f"{episode_name}_{title}_s{score}.mp4")
@@ -580,7 +1085,8 @@ def create_story_short(video_path, story, output_dir, episode_name,
                 reframe_clip(video_path, sc_start, sc_end, part_paths[k], wide_fallback=wide_fallback,
                              top_reserved=top_reserved, layout=cfg['template'] if cfg else 'legacy',
                              analysis=plan['analyses'][k] if plan.get('analyses') else None,
-                             force_wide=True)
+                             force_wide=True, **({'flash': plan['flash_frames'][k]}
+                                                 if plan.get('flash_frames') else {}))
             _merge_clips(part_paths, merged_path, audio_path)
             if cfg is None:
                 return burn_captions(merged_path, out_path, all_words or [], expanded_clips,
@@ -632,6 +1138,21 @@ def _plan_render(video_path, jobs, segments, story, all_words, cfg, pipeline,
         tail_words = [w for w in words_out if w['start'] >= parts[first_k]['off']]
         payoff_out = (tail_words or words_out)[-1]['end']
 
+    crop_w = 0.0
+    if analyses:
+        an = analyses[0]
+        aspect = 1080 / {'A1': 1350, 'B1H': 1620}.get(cfg['template'], 1920)
+        crop_w = min(an['src_w'], an['src_h'] * aspect)
+    total = parts[-1]['off'] + parts[-1]['dur'] if parts else 0.0
+
+    # edit layer: the pace plan (reframe cuts) comes first, the payoff push follows it
+    marks, pace = {'hard': sorted({c for p in parts for c in p['cuts']} |
+                                  {p['off'] for k, p in enumerate(parts) if k and p.get('join_cut')})}, None
+    payoff_start = _payoff_sentence_start(words_out, payoff_out) if cfg.get('pace') else None
+    if cfg.get('pace') and parts:
+        pace = _pace_plan(parts, words_out, payoff_out, payoff_start, crop_w, cap=float(cfg['shot_cap']))
+        marks = pace[2]
+
     # payoff push: the part holding the payoff word, from its last camera cut on
     push_part, push, push_from = None, None, None
     if payoff_out is not None:
@@ -639,20 +1160,18 @@ def _plan_render(video_path, jobs, segments, story, all_words, cfg, pipeline,
                           if p['off'] <= payoff_out < p['off'] + p['dur']), len(parts) - 1)
         p = parts[push_part]
         start = max([p['off']] + [c for c in p['cuts'] if c < payoff_out])
-        if cfg['niche'] == 'B':
+        if cfg['niche'] == 'B' or cfg.get('pace'):
             # a one-camera answer has no cut to start from: push over the last beat only
             start = max(start, min(payoff_out - _PUSH_B_LEAD, p['off'] + p['dur'] - _PUSH_MIN_S))
         if p['off'] + p['dur'] - start >= _PUSH_MIN_S:
             push_from = start
             push = (int(round((start - p['off']) * p['fps'])), _PUSH_PAYOFF)
 
-    crop_w = 0.0
-    if analyses:
-        an = analyses[0]
-        aspect = 1080 / (1350 if cfg['template'] == 'A1' else 1920)
-        crop_w = min(an['src_w'], an['src_h'] * aspect)
     toggles = []
-    if cfg['shot_cap']:
+    if pace:
+        stretches, toggles = pace[0], pace[1]
+        level = _level_fn(stretches, toggles)
+    elif cfg['shot_cap']:
         stretches, toggles = _punch_plan(parts, words_out, payoff_out, crop_w, push_from,
                                          cap=float(cfg['shot_cap']), any_gap=cfg['niche'] == 'B')
         level = _level_fn(stretches, toggles)
@@ -669,10 +1188,32 @@ def _plan_render(video_path, jobs, segments, story, all_words, cfg, pipeline,
                 cur = lv
         zoom_events.append(ev)
     if toggles:
-        print(f"  Shot cap: punch-in toggles at {[t for t, _ in toggles]}")
+        print(f"  {'Pace: reframe cuts' if pace else 'Shot cap: punch-in toggles'} at {[t for t, _ in toggles]}")
+    flashes = _flash_times(marks, parts, payoff_out, total) if cfg.get('flash') and parts else []
+    if flashes:
+        print(f"  Flash transition at {flashes}")
     return {'analyses': analyses, 'zoom_events': zoom_events, 'push': push,
             'push_part': push_part, 'payoff_out': payoff_out, 'toggles': toggles,
-            'parts': parts}
+            'parts': parts, 'flashes': flashes,
+            'flash_frames': [_flash_frames(p, flashes) for p in parts],
+            'edit_cuts': sorted(set(marks.get('hard') or []) | {t for t, _ in toggles}),
+            'first_cut': marks.get('first_cut') if pace else None,
+            'payoff_cut': marks.get('payoff_cut'),
+            'zoom_max': _REFRAME_ZOOM_MAX if pace else None}
+
+
+def _edit_part_kwargs(plan, k):
+    """reframe_clip kwargs of the edit layer for part k (flash wash, reframe zoom cap)."""
+    kw = {}
+    if plan.get('flash_frames') and plan['flash_frames'][k]:
+        kw['flash'] = plan['flash_frames'][k]
+    if plan.get('zoom_max'):
+        kw['zoom_max'] = plan['zoom_max']
+    return kw
+
+
+def _headline_text(story, cfg):
+    return (story.get('header') or story.get('hook_text')) if cfg.get('header') else None
 
 
 def _caption_settings(cfg, stats):
@@ -695,14 +1236,20 @@ def _caption_settings(cfg, stats):
     return {'template': cfg['template'], 'caption_preset': cfg['caption_preset'],
             'caption_y': y, 'names': cfg['names'], 'handle': cfg['handle'],
             'handle_size': cfg.get('handle_size'), 'watermark': cfg.get('watermark'),
-            'captions_engine': cfg.get('captions_engine', 'ass')}
+            'captions_engine': cfg.get('captions_engine', 'ass'),
+            'headline': bool(cfg.get('headline'))}
 
 
 def _overlay_settings(story, cfg, segments, words_out):
     """Header / context card / closing line / stage directions for this render."""
-    header = (story.get('header') or story.get('hook_text')) if cfg['header'] else None
+    header = _headline_text(story, cfg)
     ov = {'header': header,
           'last_word_end': words_out[-1]['end'] if words_out else None}
+    if header and cfg.get('headline'):
+        # edit layer headline: 1-2 coloured keywords, an optional emoji, up for headline_s (None: whole clip)
+        ov['header_keywords'] = list(story.get('header_keywords') or [])
+        ov['header_emoji'] = str(story.get('hook_emoji') or '').strip()
+        ov['header_until'] = cfg.get('headline_s')
     context = story.get('context_line')
     if cfg['template'] == 'A2' and not context:
         context = story.get('header') or story.get('hook_text')   # A2's intro card
@@ -760,6 +1307,15 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
         if cfg['template'] == 'A1':
             from reframer import A1_WINDOW
             ctx['live_rows'] = ctx['window'] = (A1_WINDOW[0], A1_WINDOW[0] + A1_WINDOW[1])
+        elif cfg['template'] == 'B1H':
+            from reframer import B1H_WINDOW
+            ctx['live_rows'] = ctx['window'] = (B1H_WINDOW[0], B1H_WINDOW[0] + B1H_WINDOW[1])
+        # edit layer: what QA checks it against (first cut, flash frames, the hook-frame fails)
+        if cfg.get('pace') or cfg.get('flash') or cfg.get('sfx_mode') or cfg.get('hook_qa'):
+            ctx['edit'] = {'pace': bool(cfg.get('pace')), 'first_cut': plan.get('first_cut'),
+                           'edit_cuts': plan.get('edit_cuts'), 'flashes': plan.get('flashes') or [],
+                           'sfx': plan.get('sfx') or [], 'hook_qa': bool(cfg.get('hook_qa')),
+                           'headline': bool(cfg.get('headline'))}
     elif story.get('hook_text'):
         ctx['live_rows'] = ctx['window'] = (320, 1920)
     try:
@@ -782,7 +1338,9 @@ def _run_qa(out_path, merged_path, cfg, story, all_words, segments, jobs, enc, p
                                 render=dict(render_cfg or {},
                                             handle=(render_cfg or {}).get('handle') if cfg.get('handle_required')
                                             else None),
-                                overlays={'header': (story.get('header') or story.get('hook_text'))
+                                overlays={**{k: v for k, v in _overlay_settings(story, cfg, segments, words_out).items()
+                                             if k.startswith('header_')},
+                                          'header': (story.get('header') or story.get('hook_text'))
                                           if cfg['header'] else None,
                                           # a brief-required text hook (BILF) stays: the card is
                                           # clamped above the safe line, so it cannot cause the fail

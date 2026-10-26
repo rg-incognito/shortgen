@@ -74,16 +74,30 @@ export const Captions = (props) => {
     return <AbsoluteFill style={{backgroundColor: 'transparent'}} />;
   }
   const words = chunk.lines.flat();
+  // edit layer (props.style 'edit', EDIT_SPEC R3): no moving word highlight, only the chunk's
+  // keyword keeps its colour; the chunk pops in 0.85 -> 1.0 over 80 ms (ease-out, no bounce)
+  // and fades in over 60 ms.
+  const edit = props.style === 'edit';
   // active word: the last one already revealed
   let active = -1;
-  words.forEach((w, i) => {
-    if (t >= w.t) active = i;
-  });
-  const enter = spring({frame: Math.max(0, (t - chunk.start) * fps), fps, config: POP, durationInFrames: 7});
-  const pop = interpolate(enter, [0, 1], [0.78, 1.0]);
+  if (!edit) {
+    words.forEach((w, i) => {
+      if (t >= w.t) active = i;
+    });
+  }
+  const since = Math.max(0, t - chunk.start);
+  let pop;
   let opacity = 1;
+  if (edit) {
+    const p = Math.min(1, since / 0.08);
+    pop = 0.85 + 0.15 * (1 - Math.pow(1 - p, 3));
+    opacity = Math.min(1, since / 0.06);
+  } else {
+    const enter = spring({frame: since * fps, fps, config: POP, durationInFrames: 7});
+    pop = interpolate(enter, [0, 1], [0.78, 1.0]);
+  }
   if (chunk.fade_out && props.seam_s > 0) {
-    opacity = interpolate(t, [props.total_s - props.seam_s, props.total_s], [1, 0],
+    opacity *= interpolate(t, [props.total_s - props.seam_s, props.total_s], [1, 0],
       {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
   }
   let k = -1;

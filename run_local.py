@@ -8,6 +8,12 @@ Run the shorts pipeline on this PC instead of GitHub Actions.
     python run_local.py <campaign> --slot HH:MM ...
         # pin the run to one of the campaign's publish_slots_et (PUBLISH_SLOT), for
         # campaigns with two daily slots
+    python run_local.py <campaign> --no-upload [--video PATH] [--out DIR] [--episode NAME]
+        # dry run: pick, render, QA and write metadata, then stop. Nothing is uploaded to
+        # Drive or YouTube and nothing is written to the tracker (it is only read). The
+        # Short + .qa.json/.story.json/.meta.json land in DIR (default local_test/output/
+        # no_upload). --video uses footage already on this PC instead of downloading it
+        # (pass --episode with the profile's episode name for that file).
 
 Secrets come from .env (gitignored), the same values as the GitHub secrets:
     GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GEMINI_API_KEY, HF_TOKEN
@@ -23,7 +29,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-SA_FILE = ROOT / 'parental-app-635e3-f7946c9be549.json'
+# .env and the service-account key live in the main checkout; a git worktree can point here at it
+SECRETS = Path(os.environ.get('SHORTGEN_SECRETS_DIR') or ROOT)
+SA_FILE = SECRETS / 'parental-app-635e3-f7946c9be549.json'
 LOCK = ROOT / 'logs' / 'run_local.lock'
 LOCK_WAIT_MIN = 90   # fallbacks fire close together: queue behind a running one, don't skip
 
@@ -41,7 +49,7 @@ DEFAULTS = {
 def _load_env():
     env = dict(os.environ)
     env.update(DEFAULTS)
-    for line in (ROOT / '.env').read_text(encoding='utf-8').splitlines():
+    for line in (SECRETS / '.env').read_text(encoding='utf-8').splitlines():
         line = line.strip()
         if line and not line.startswith('#') and '=' in line:
             k, v = line.split('=', 1)
@@ -108,6 +116,18 @@ def main():
     env['CAMPAIGN'] = campaign
     if '--slot' in sys.argv:
         env['PUBLISH_SLOT'] = sys.argv[sys.argv.index('--slot') + 1]
+    if '--no-upload' in sys.argv:
+        env['NO_UPLOAD'] = '1'
+        for flag, key in (('--video', 'LOCAL_VIDEO'), ('--out', 'NO_UPLOAD_DIR'), ('--episode', 'EPISODE_NAME')):
+            if flag in sys.argv:
+                env[key] = str(Path(sys.argv[sys.argv.index(flag) + 1]).resolve()) if flag != '--episode' \
+                    else sys.argv[sys.argv.index(flag) + 1]
+        if env.get('LOCAL_VIDEO') and env.get('EPISODE_NAME'):
+            # main skips the auto-pick when VIDEO_FILE_ID is set; the local file replaces the download
+            env['VIDEO_FILE_ID'] = Path(env['LOCAL_VIDEO']).stem
+        print('NO UPLOAD: nothing goes to Drive, YouTube or the tracker sheet')
+    elif any(f in sys.argv for f in ('--video', '--out', '--episode')):
+        sys.exit('--video / --out / --episode only work with --no-upload')
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M')
     log = ROOT / 'logs' / f'{stamp}_{campaign}.log'
     print(f'Running {campaign} locally — log: {log}')

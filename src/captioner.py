@@ -368,8 +368,13 @@ _PRESETS = {
     'tv':        dict(cap=64, words=3, chars=14, lines=1, pop=False),
     'talk':      dict(cap=64, words=3, chars=14, lines=1, pop=True),
     'full_subs': dict(cap=62, words=7, chars=30, lines=2, pop=False, line_chars=17),
+    # Edit layer (EDIT_SPEC R3): 1-3 words, mixed case, one keyword on ~25% of chunks at most,
+    # a chunk pop-in (0.85 -> 1.0 over 80 ms, fade in over 60 ms), never a moving word highlight.
+    'edit':      dict(cap=64, words=3, chars=14, lines=1, pop='edit', case='mixed', keyword_share=0.25,
+                      strict=True),
 }
-_TEMPLATE_CAPTION_Y = {'A1': 1160, 'A2': 1160, 'B1': 960}   # \an5 centre per template
+# \an5 centre per template; B1H (B1 under the headline band) sits at 0.6 of the frame (spec R3)
+_TEMPLATE_CAPTION_Y = {'A1': 1160, 'A2': 1160, 'B1': 960, 'B1H': 1150}
 _CAP_X2       = 530       # centre x: the chunk (max 800 wide) stays left of the right rail
 _CAP_MAX_W    = 800
 _CAP_MIN_FIT  = 85        # shrink-to-fit floor (\fscx %)
@@ -384,6 +389,9 @@ _CHUNK_GAP_V2, _CHUNK_HOLD_V2, _CHUNK_MIN_V2 = 0.25, 0.60, 0.25
 _CAPTION_LEAD_V2 = 0.04
 _KEYWORD_SHARE = 0.45     # at most this share of chunks carries a coloured word
 _POP_V2 = r"\fscx{a}\fscy85\t(0,67,\fscx{b}\fscy112)\t(67,133,\fscx{c}\fscy100)"
+# edit-layer chunk entry: scale 0.85 -> 1.0 over 80 ms (ease-out), alpha in over 60 ms, no bounce
+_POP_EDIT = (r"\fscx{a}\fscy85\1a&HFF&\3a&HFF&\4a&HFF&\t(0,60,\1a&H00&\3a&H00&\4a&H80&)"
+             r"\t(0,80,0.6,\fscx{c}\fscy100)")
 
 _NUM_RE = re.compile(r"\d|[$%£€]|^(MILLION|BILLION|THOUSAND|HUNDRED|HOURS?|YEARS?|DOLLARS?|BUCKS)$")
 _NEG_WORDS = {"RAW", "WRONG", "FIRED", "DEAD", "NEVER", "WORST", "HATE", "STOP", "NO", "DISGUSTING",
@@ -463,14 +471,27 @@ def _bare(text):
 _PUNCT_END = re.compile(r'[.!?,]["\')\]]*$')
 
 
-def _chunk_words_v2(mapped_words, max_words=3, max_chars=14):
+def _display(text, case):
+    """On-screen form of a caption word: ALL CAPS, or (mixed) Whisper's own casing without a
+    trailing comma / full stop (a question or exclamation mark stays)."""
+    if case != 'mixed':
+        return text
+    t = re.sub(r'[,.;:]+(["\')\]]*)$', r'\1', text)
+    return t or text
+
+
+def _chunk_words_v2(mapped_words, max_words=3, max_chars=14, case='upper', strict=False):
     """1-3 word chunks; breaks on .?!, , pauses > 0.25 s; never ends on a stopword;
-    chunks shown < 0.25 s merge into the next one."""
+    chunks shown < 0.25 s merge into the next one. case 'mixed' (edit layer): each word
+    also carries 'disp', its on-screen mixed-case form (text stays upper for the rules).
+    strict (edit layer): the stopword shift and the short-chunk fold never exceed max_words."""
+    cap = max_words if strict else max_words + 1
     words = []
     for w in mapped_words:
-        text = w['word'].strip().upper()
+        raw = w['word'].strip()
+        text = raw.upper()
         if text:
-            words.append(dict(w, text=text))
+            words.append(dict(w, text=text, disp=_display(raw, case) if case == 'mixed' else text))
     chunks, cur = [], []
     for w in words:
         if cur:
@@ -491,7 +512,7 @@ def _chunk_words_v2(mapped_words, max_words=3, max_chars=14):
         while (len(c) > 1 and _bare(c[-1]['text']) in _STOPWORDS
                and not _PUNCT_END.search(c[-1]['text'])
                and nxt[0]['start'] - c[-1]['end'] <= _CHUNK_GAP_V2
-               and len(nxt) <= max_words
+               and len(nxt) + 1 <= cap
                and len(" ".join(x['text'] for x in [c[-1]] + nxt)) <= max_chars + 6):
             nxt.insert(0, c.pop())
 
@@ -501,7 +522,7 @@ def _chunk_words_v2(mapped_words, max_words=3, max_chars=14):
         if out and out[-1] is not None:
             prev = out[-1]
             if (c[0]['start'] - prev[0]['start'] < _CHUNK_MIN_V2
-                    and len(prev) + len(c) <= max_words + 1
+                    and len(prev) + len(c) <= cap
                     and not re.search(r'[.!?]["\')\]]*$', prev[-1]['text'])):
                 out[-1] = prev + c
                 continue
@@ -525,7 +546,7 @@ def _wrap_two(texts, limit):
 
 def _keyword_pick(chunk, names, sentence_end):
     """(index, colour, priority) of the one word to colour in this chunk, or None."""
-    words = [_bare(w['text']) for w in chunk]
+    words = [_bare(w['text']).upper() for w in chunk]
     for i, w in enumerate(words):
         if _NUM_RE.search(w):
             return i, _GREEN, 3
@@ -577,12 +598,15 @@ def _caption_chunks(mapped, total_duration, cfg, overlays):
     """
     P = _PRESETS.get(cfg.get('caption_preset'), _PRESETS['tv'])
     fs = _ass_fontsize(_font_path(_FONT_FILE), P['cap'])
-    chunks = _chunk_words_v2(mapped, P['words'], P['chars'])
+    chunks = _chunk_words_v2(mapped, P['words'], P['chars'], P.get('case', 'upper'), P.get('strict', False))
     names = cfg.get('names') or _DEFAULT_NAMES
     picks = [_keyword_pick(c, names, bool(re.search(r'[.!?]["\')\]]*$', c[-1]['text'])))
              for c in chunks]
+    if P.get('case') == 'mixed':
+        # sparse emphasis (spec R3): numbers, negatives and names only, never a sentence-end filler pick
+        picks = [p if p and p[2] >= 2 else None for p in picks]
     # keep the highlight rare: drop the weakest picks above the share cap
-    limit = int(_KEYWORD_SHARE * len(chunks))
+    limit = int(P.get('keyword_share', _KEYWORD_SHARE) * len(chunks))
     order = sorted((i for i, p in enumerate(picks) if p), key=lambda i: (picks[i][2], -i))
     while sum(1 for p in picks if p) > limit and order:
         picks[order.pop(0)] = None
@@ -602,7 +626,7 @@ def _caption_chunks(mapped, total_duration, cfg, overlays):
         if e - s < 0.04:
             continue
         kw = picks[ci]
-        texts = [w['text'] for w in chunk]
+        texts = [w.get('disp', w['text']) for w in chunk]
         lines = _wrap_two(texts, P.get('line_chars', P['chars'])) if P['lines'] > 1 else [texts]
         coloured, j = [], 0
         for ln in lines:
@@ -655,12 +679,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     seam_ms = int(round(1000 * float(overlays.get('loop_seam') or 0)))
     for ch in (_caption_chunks(mapped, total_duration, cfg, overlays) if captions else ()):
         s, e, fx = ch['s'], ch['e'], ch['fx']
-        rendered = [" ".join((r"{\c" + c + "}" + w['text'] + r"{\c" + _WHITE + "}") if c else w['text']
-                             for w, c in ln)
+        rendered = [" ".join((r"{\c" + c + "}" + _ass_escape(w.get('disp', w['text'])) + r"{\c" + _WHITE + "}")
+                             if c else _ass_escape(w.get('disp', w['text'])) for w, c in ln)
                     for ln in ch['lines']]
         fit = rf"\fscx{fx}" if fx < 100 else ""
-        anim = (_POP_V2.format(a=round(85 * fx / 100), b=round(112 * fx / 100), c=fx)
-                if P['pop'] else "")
+        if P['pop'] == 'edit':
+            anim = _POP_EDIT.format(a=round(85 * fx / 100), c=fx)
+        else:
+            anim = (_POP_V2.format(a=round(85 * fx / 100), b=round(112 * fx / 100), c=fx)
+                    if P['pop'] else "")
         if seam_ms and ch['fade']:
             anim += rf"\fad(0,{seam_ms})"   # a caption up at the end fades with the loop seam
         line = rf"{{\an5\pos({_CAP_X2},{cy}){fit}{anim}}}" + r"\N".join(rendered)
@@ -718,6 +745,116 @@ def _balanced_two(draw, text, font, max_w):
     return best[1] if best else _wrap_lines(draw, text, font, max_w)
 
 
+# Edit-layer hook headline (EDIT_SPEC R2, BACKLOG P0-2): in the top band from frame 0 (no fade),
+# 2 lines of <= 22 characters, 1-2 keywords coloured (yellow #FFE400, red #FF2D2D for a
+# negative / shock word), the rest white, at most one emoji at the end.
+_HL_YELLOW = (255, 228, 0, 255)
+_HL_RED = (255, 45, 45, 255)
+_HL_LINE_CHARS = 22
+_HL_RED_WORDS = {'NOT', 'NO', 'NEVER', 'WRONG', 'WORST', 'LOST', 'FAIL', 'FAILED', 'CAUGHT', 'HATE', 'STOP',
+                 'NOBODY', 'NOTHING', 'DISGUSTING', 'BROKE', 'QUIT', 'FIRED', 'DEAD', 'SCREAM', 'SCARED'}
+_HL_STOP = _STOPWORDS | {'WAS', 'WERE', 'HAS', 'HAVE', 'HAD', 'DID', 'DOES', 'DO', 'CAN', 'WILL', 'GOT'}
+
+
+def headline_keywords(header, keywords=None, limit=2):
+    """Indexes (into header.split()) of the 1-2 words to colour: the LLM's header_keywords when
+    they are in the header, else words written in CAPS inside a mixed-case header, else a
+    number, else the longest content word."""
+    words = header.split()
+    bare = [re.sub(r"[^\w$%'£€]", '', w).upper() for w in words]
+    out = []
+    for kw in keywords or []:
+        k = re.sub(r"[^\w$%'£€]", '', str(kw)).upper()
+        for i, b in enumerate(bare):
+            if b and b == k and i not in out:
+                out.append(i)
+                break
+    if not out:
+        mixed = any(c.islower() for c in header)
+        if mixed:
+            out = [i for i, w in enumerate(words) if len(bare[i]) >= 2 and re.sub(r"[^A-Za-z]", '', w).isupper()
+                   and bare[i] not in ('I', "I'M")]
+    if not out:
+        out = [i for i, b in enumerate(bare) if _NUM_RE.search(b)][:1]
+    if not out:
+        cands = [i for i, b in enumerate(bare) if b not in _HL_STOP and len(b) > 3]
+        if cands:
+            out = [max(cands, key=lambda i: len(bare[i]))]
+    return sorted(out[:limit])
+
+
+def _headline_lines(draw, words, font, max_w):
+    """<= 2 balanced lines (lists of word indexes) of the headline, each <= _HL_LINE_CHARS when possible."""
+    text = " ".join(words)
+    if draw.textlength(text, font=font) <= max_w and len(text) <= _HL_LINE_CHARS or len(words) < 2:
+        return [list(range(len(words)))]
+    best = None
+    for k in range(1, len(words)):
+        a, b = " ".join(words[:k]), " ".join(words[k:])
+        wa, wb = draw.textlength(a, font=font), draw.textlength(b, font=font)
+        over = max(0, len(a) - _HL_LINE_CHARS) + max(0, len(b) - _HL_LINE_CHARS)
+        key = (max(wa, wb) > max_w, over, abs(wa - wb))
+        if best is None or key < best[0]:
+            best = (key, [list(range(k)), list(range(k, len(words)))])
+    return best[1]
+
+
+def render_headline_png(out_path, header, keywords=None, emoji='', template='A1'):
+    """The edit layer's hook headline as a full-canvas transparent PNG (Montserrat ExtraBold
+    Italic, black stroke and soft shadow, coloured keywords, optional colour emoji) centred in
+    the top band (_HEAD_BAND). Returns the text box (x0, y0, x1, y1)."""
+    header = " ".join(str(header).split())
+    words = header.split()
+    picks = set(headline_keywords(header, keywords))
+    img = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
+    shadow = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
+    d, sd = ImageDraw.Draw(img), ImageDraw.Draw(shadow)
+    emoji = (emoji or '').strip()
+    size = _HEAD_SIZE + 4
+    while True:
+        font = ImageFont.truetype(_font_path(_MONT_XBI), size)
+        reserve = int(size * 1.1) + 14 if emoji else 0
+        lines = _headline_lines(d, words, font, _HEAD_MAX_W - reserve)
+        widest = max(d.textlength(" ".join(words[i] for i in ln), font=font) for ln in lines)
+        if (len(lines) <= 2 and widest <= _HEAD_MAX_W - reserve) or size <= _HEAD_MIN:
+            break
+        size -= 4
+    lines = lines[:2]
+    pitch = int(round(_HEAD_PITCH * size / _HEAD_SIZE))
+    centre = sum(_HEAD_BAND) / 2
+    top = centre - pitch * len(lines) / 2
+    space = d.textlength(" ", font=font)
+    glyph = None
+    if emoji:
+        ef = _find_font(_HOOK_EMOJI_FONT_CANDIDATES)
+        glyph = _render_emoji_glyph(emoji, ef, int(size * 1.0)) if ef else None
+        if glyph is None:
+            print("  Headline emoji skipped (no colour emoji font)")
+    box = [_OUT_W, _OUT_H, 0, 0]
+    for k, ln in enumerate(lines):
+        ws = [words[i] for i in ln]
+        widths = [d.textlength(w, font=font) for w in ws]
+        lw = sum(widths) + space * (len(ws) - 1)
+        last = k == len(lines) - 1
+        ew = glyph.width + 14 if (glyph is not None and last) else 0
+        x = (_OUT_W - lw - ew) / 2
+        y = top + pitch * k + pitch / 2
+        for i, w, wd in zip(ln, ws, widths):
+            bare = re.sub(r"[^\w$%'£€]", '', w).upper()
+            col = (_HL_RED if bare in _HL_RED_WORDS else _HL_YELLOW) if i in picks else (255, 255, 255, 255)
+            sd.text((x, y + 4), w, font=font, fill=(0, 0, 0, 153), anchor='lm',
+                    stroke_width=_HEAD_STROKE, stroke_fill=(0, 0, 0, 153))
+            d.text((x, y), w, font=font, fill=col, anchor='lm', stroke_width=_HEAD_STROKE + 1,
+                   stroke_fill=(0, 0, 0, 255))
+            x += wd + space
+        if ew:
+            img.paste(glyph, (int(x - space + 14), int(y - glyph.height / 2)), glyph)
+            x += ew
+        box = [min(box[0], (_OUT_W - lw - ew) / 2), min(box[1], y - pitch / 2), max(box[2], x), max(box[3], y + pitch / 2)]
+    Image.alpha_composite(shadow, img).save(out_path)
+    return tuple(int(v) for v in box)
+
+
 def render_overlay_png(out_path, template, header=None, handle=None, handle_y=None, handle_size=None):
     """
     Persistent overlay layer: the A1 headline in the top blur band (Montserrat
@@ -726,7 +863,7 @@ def render_overlay_png(out_path, template, header=None, handle=None, handle_y=No
     handle_size px, fully opaque). Returns the handle's box (x0, y0, x1, y1) or None.
     """
     layer = Image.new('RGBA', (_OUT_W, _OUT_H), (0, 0, 0, 0))
-    if header and template == 'A1':
+    if header and template in ('A1', 'B1H'):
         text = " ".join(header.upper().split())
         d = ImageDraw.Draw(layer)
         size = _HEAD_SIZE
@@ -766,7 +903,8 @@ def render_overlay_png(out_path, template, header=None, handle=None, handle_y=No
 # Placement stays inside the Shorts safe zone: above y _SAFE_BOTTOM (title / channel UI), left
 # of the right-hand button rail (x 990), clear of the A1 header band and the caption line.
 _REPO_DIR      = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
-_WM_TOP        = {'A1': _HEAD_BAND[1] + 24, 'A2': 150, 'B1': 150}   # 'top': top edge per template
+_WM_TOP        = {'A1': _HEAD_BAND[1] + 24, 'A2': 150, 'B1': 150,     # 'top': top edge per template
+                  'B1H': _HEAD_BAND[1] + 24}                            # under the headline band
 _WM_LOW_GAP    = 150      # 'center_low': top edge this far below the caption centre
 _WM_RAIL_X     = 990      # right-rail buttons start here
 _WM_MAX_W      = 2 * (_WM_RAIL_X - 10 - _OUT_W // 2)    # centred at x 540, ends left of the rail
@@ -907,7 +1045,14 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
         pngs, allowed = [], []
         handle_y = (_HANDLE_A1_Y if template == 'A1'
                     else min(_SAFE_BOTTOM - 20, cy + _PRESETS.get(cfg.get('caption_preset'), _PRESETS['tv'])['cap'] // 2 + 40))
-        header = ov.get('header') if template == 'A1' else None
+        header = ov.get('header') if template in ('A1', 'B1H') else None
+        if header and cfg.get('headline'):
+            # edit layer: the hook headline is its own layer (it may leave after headline_s)
+            p = os.path.join(work, 'headline.png')
+            render_headline_png(p, header, ov.get('header_keywords'), ov.get('header_emoji'), template)
+            until = ov.get('header_until')
+            pngs.append((p, min(float(until), dur) if until else None))
+            header = None
         if header or cfg.get('handle'):
             p = os.path.join(work, 'layer.png')
             box = render_overlay_png(p, template, header, cfg.get('handle'), handle_y, cfg.get('handle_size'))
@@ -943,7 +1088,8 @@ def _burn_v2(video_path, output_path, mapped, cfg, ov):
             script_ov.update(closing=ov['closing'], closing_start=start, closing_y=y)
         print(f"  Captions: {len(mapped)} words, template {template}, preset "
               f"{cfg.get('caption_preset', 'tv')}, y {cy}" +
-              (" + header" if header else "") + (" + context card" if ov.get('context') else "") +
+              (" + header" if header else "") +
+              (f" + headline {ov.get('header')!r}" if ov.get('header') and cfg.get('headline') else "") + (" + context card" if ov.get('context') else "") +
               (" + closing line" if ov.get('closing') else "") +
               (f" + {len(script_ov['tags'])} tag(s)" if script_ov['tags'] else "") +
               (f" + watermark {wm_box}" if wm_box else "") +
@@ -1070,7 +1216,7 @@ def _remotion_layer(video_path, work, mapped, dur, cfg, script_ov):
         P = _PRESETS.get(cfg.get('caption_preset'), _PRESETS['tv'])
         props = RC.build_props(_caption_chunks(mapped, dur, cfg, script_ov), dur, fps, cfg['caption_y'],
                                seam=script_ov.get('loop_seam') or 0, center_x=_CAP_X2, cap_px=P['cap'],
-                               lead=_CAPTION_LEAD_V2)
+                               lead=_CAPTION_LEAD_V2, style='edit' if P.get('pop') == 'edit' else 'pop')
         out = RC.render(props, work)
         out['rate'] = rate
         print(f"  Captions: Remotion layer, {out['frames']} frames in {out['seconds']:.0f}s")

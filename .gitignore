@@ -23,3 +23,6 @@ footage_hs/
 !remotion/package-lock.json
 remotion/node_modules/
 remotion/out/
+
+# faceid (P0-5) models, downloaded on first use
+*.onnx
