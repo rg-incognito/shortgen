@@ -348,12 +348,17 @@ _SOFT_PREFIXES = ('opens mid-sentence', 'opens on an outro', 'opens on an abstra
                   'opener leans', 'crosses a cut where the guests change')
 
 
-def _soft_problem(p, profile):
-    """(soft?, hides the headline?) for one candidate problem string."""
+def _soft_problem(p, profile, used_segments=None):
+    """(soft?, hides the headline?) for one candidate problem string. used_segments: the segments
+    really used by earlier uploads; overlap with a segment only offered earlier in this run is soft."""
     import re as _re
     from campaigns import NICHE_LENGTH
     if p.startswith(_SOFT_PREFIXES):
         return True, False
+    m = _re.match(r'reuses [\d.]+s of used segment (\d+)-(\d+)s', p)
+    if m and used_segments is not None:
+        s, e = float(m.group(1)), float(m.group(2))
+        return not any(abs(s - a) < 1.0 and abs(e - b) < 1.0 for a, b in used_segments), False
     if p.startswith('header ') and 'banned' not in p:
         # soft only where the header is on screen because of the edit layer (A1 showed it before)
         legacy = bool(render_config(profile).get('header'))
@@ -371,7 +376,7 @@ def _soft_problem(p, profile):
     return False, False
 
 
-def _edit_fallback(candidates, profile, min_score):
+def _edit_fallback(candidates, profile, min_score, used_segments=()):
     """
     The best candidate whose only problems are edit-layer soft rules (and that clears the score
     gate), marked '_relaxed' (and '_hide_headline' when its header broke an on-screen rule), or None.
@@ -380,7 +385,7 @@ def _edit_fallback(candidates, profile, min_score):
     for story, problems in candidates:
         if not problems or story['score'] < min_score:
             continue
-        judged = [_soft_problem(p, profile) for p in problems]
+        judged = [_soft_problem(p, profile, list(used_segments)) for p in problems]
         if not all(s for s, _ in judged):
             continue
         if best is None or story['score'] > best[0]['score']:
@@ -545,7 +550,7 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
             best_weak = passing[0]
 
     if not best_weak and any(edit_config(profile).get(k) for k in ('hook_rejects', 'guest_cut', 'headline', 'length')):
-        fb = _edit_fallback(everything, profile, min_score)
+        fb = _edit_fallback(everything, profile, min_score, used_segments)
         if fb:
             return fb
     if best_weak:

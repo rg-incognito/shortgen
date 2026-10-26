@@ -273,6 +273,7 @@ CAMPAIGNS = {
         'wide_fallback':   True,
         # Brief needs 20s+ (the render check allows 1s under min_seconds).
         'min_seconds':     21.0,     # edit layer: the 13-18 s window moves to 21-22.5 s, cap 24 (brief floor)
+        'brief_min_seconds': 20.0,    # brief: 20 s+ (the edit-layer fallback floor)
         'max_seconds':     40.0,
         'sponsorblock':    True,
         'playlist':        'Solved with Mark Manson',
