@@ -7,20 +7,32 @@ How the Whop Content Rewards setup works, what runs on its own, and what needs a
 
 | Piece | Where | What it does |
 |---|---|---|
-| GitHub Actions schedule | `.github/workflows/generate_shorts.yml` | Each run renders ~90 min before its campaign's publish slot and schedules the YouTube upload to go public at the slot (see table below). It picks the next unused moment, renders a captioned 9:16 Short, adds it to the playlist, logs it in the tracker sheet. |
-| Local fallback | Windows Task Scheduler: `shortGen fallback *` (one per slot, at the publish time in IST) | `python run_local.py <campaign> --if-gh-missed HH:MM` — runs the same pipeline on this PC only if GitHub had no successful/running scheduled run for that slot (e.g. Actions minutes ran out); it then publishes as soon as possible. One local run at a time; logs in `logs/`. Needs the PC on and you logged into Windows. |
+| GitHub Actions schedule | `.github/workflows/generate_shorts.yml` | Each run starts ~6 h before its campaign's publish slot (~7 h in EST) and schedules the YouTube upload to go public at the slot (see table below). It picks the next unused moment, renders a captioned 9:16 Short, adds it to the playlist, logs it in the tracker sheet. |
+| Local fallback | Windows Task Scheduler: `shortGen fallback *` (one per slot, ~2 h before it; registered by `scripts/register_fallback_tasks.ps1`) | `python run_local.py <campaign> [--slot HH:MM] --if-gh-missed <cron HH:MM UTC>` — waits for a GitHub run of the same cron that is still going, then runs the pipeline, which exits at once if the slot already holds a Short and uploads only if the slot is still empty after its render. One local run at a time; logs in `logs/`, every fallback decision in `logs/fallback.log`. Needs the PC on and you logged into Windows. |
 
 ### Publish slots (US Eastern — `publish_slots_et` in `src/campaigns.py`, follows daylight saving)
 
-| Campaign | Publish (ET) | UK time | Why | GitHub cron (UTC, ~3h early) | Local fallback (IST) |
+| Campaign | Publish (ET) | Publish (UTC, EDT / EST) | Why | GitHub cron (UTC, ~6 h early in EDT, ~7 h in EST) | Local fallback (IST, 2 h early in EDT, 3 h in EST) |
 |---|---|---|---|---|---|
-| MilkXP Ep. 3 | 18:45 + 19:45 | 23:45 + 00:45 | US evening; strongest early views (782 in 3 h on the first Short) | `45 19 * * *`, `45 20 * * *` | 03:05, 04:05 |
-| Mark Manson | 20:00 | 01:00 | US evening (self-improvement wind-down; US-evening slots seed a T1 audience) | `0 21 * * *` | 04:20 |
-| Unpacked (Ep. 3, David Dobrik first) | 21:00 | 02:00 | US evening; fresh Ep. 3 YouTube budget | `0 22 * * *` | 05:20 |
-| LADbible (John Cena & Jessica Biel) | 22:30 + 23:15 | 03:30 + 04:15 | US late evening; $5K budget, A-list | `30 23 * * *`, `15 0 * * *` | 06:50, 07:35 |
+| MilkXP Ep. 3 | 18:45 + 19:45 | 22:45 / 23:45 + 23:45 / 00:45 | US evening; strongest early views (782 in 3 h on the first Short) | `42 16 * * *`, `42 17 * * *` | 02:15, 03:15 |
+| Mark Manson | 20:00 | 00:00 / 01:00 | US evening (self-improvement wind-down; US-evening slots seed a T1 audience) | `57 17 * * *` | 03:30 |
+| Unpacked (Ep. 3, David Dobrik first) | 21:00 | 01:00 / 02:00 | US evening; fresh Ep. 3 YouTube budget | `57 18 * * *` | 04:30 |
+| LADbible (John Cena & Jessica Biel) | 22:30 + 23:15 | 02:30 / 03:30 + 03:15 / 04:15 | US late evening; $5K budget, A-list | `27 20 * * *`, `12 21 * * *` | 06:00, 06:45 |
 
-Local fallbacks (Task Scheduler, `shortGen fallback <CAMPAIGN> <slot>`, wake the PC) run
-`run_local.py <campaign> [--slot HH:MM] --if-gh-missed <cron UTC>`; a local run takes ~16 min (tested 2026-10-25).
+Local fallbacks (Task Scheduler, `shortGen fallback <CAMPAIGN> <slot>`, wake the PC, 3 h limit) run
+`run_local.py <campaign> [--slot HH:MM] --if-gh-missed <cron HH:MM UTC>`; a local run takes ~16-45 min (2026-10-25).
+Re-register them with `powershell -ExecutionPolicy Bypass -File scripts\register_fallback_tasks.ps1` (`-WhatIf` previews).
+A cron string lives in three places that must match: the `schedule:` list and the CAMPAIGN / PUBLISH_SLOT
+expressions in the workflow, and `--if-gh-missed` in the task script (`test_scheduling.py` checks them).
+
+**Spacing rule (since 2026-10-26):** no two of our Shorts, across all campaigns, go public less than 75 min apart
+(Shorts posted within 0-60 min of another got under 50 views). With the slots above that means 18:45 and 19:45
+(60 min), 19:45 and 20:00, 20:00 and 21:00, 22:30 and 23:15 cannot all be used on one evening: the first
+run to book wins, a blocked run rolls its Short to the campaign's next free slot only if the campaign has
+nothing queued yet (one rolled Short at a time), and otherwise stops before rendering. Expect ~3 Shorts a
+night (MilkXP 18:45, Mark Manson or Unpacked, LADbible 22:30) until the slots are re-spaced; the window that
+is open in both EST and EDT (18:30-23:30 ET) fits at most five slots 75 min apart (18:30, 19:45, 21:00,
+22:15, 23:30).
 
 Since 2026-10-25 the Rohit-Gande/shortgen copy (old Friends code, posting to the same channel) is disabled,
 and its two daily posts went to a second MilkXP and LADbible slot (each cron sets PUBLISH_SLOT).
@@ -46,8 +58,11 @@ brand's Dropbox footage; they were uploaded directly for 2026-10-20 23:00, 10-21
 Captions start with @JacobCoofficial and write out Kylie Jenner / Victoria's Secret (never @ them).
 Submissions close Fri 2026-10-23 11:59 PM ET; no demographics ticket (stats come from the linked account).
 
-GitHub starts scheduled runs 1-2+ hours late, hence the early crons; the upload is still scheduled for the slot.
-If a campaign already has a Short in that slot (late cron + local fallback both fired) the second run exits.
+GitHub starts scheduled runs late (4.6 h for LADbible 23:15 on 2026-10-25), hence the early crons; the upload is still
+scheduled for the slot. Each run checks YouTube (every upload on the channel) and the tracker sheet at the start and
+again right before uploading: if the campaign already has a Short in that slot (late cron + local fallback both fired)
+the second run exits without uploading. A run never publishes "now": if its slot has passed or is under 15 min away
+it rolls to the campaign's next free slot (or the same slot tomorrow).
 After a reboot: relaunch Claude Code (it runs the Whop auto-submit watcher) and stay signed in to Windows.
 
 Submit to Whop within 30 min of each publish time.
@@ -95,7 +110,9 @@ To add one: profile in `src/campaigns.py` (length limits, `required_caption`, `c
 `src/analyzer.py` → `_PROMPTS`, footage as Drive file IDs or a GitHub release `footage-<name>`
 (download YouTube sources as **H.264** — AV1 breaks OpenCV on CI:
 `python -m yt_dlp -f "bv*[height<=720][vcodec^=avc1]+ba[ext=m4a]/b[height<=720][vcodec^=avc1]" --merge-output-format mp4 <url>`),
-test with one manual run, then pick a `publish_slots_et` time for its audience and add a cron ~90 min earlier (plus a local fallback task).
+test with one manual run, then pick a `publish_slots_et` time for its audience (at least 75 min from every other slot) and add a cron ~6 h
+earlier (plus a row in `scripts/register_fallback_tasks.ps1` ~2 h before the slot). Add `hotwords` (names and terms
+Whisper mishears) to the profile; talk / podcast campaigns transcribe with `medium.en` (falls back to `medium`).
 
 ## Active campaigns (as of 2026-10-18)
 
