@@ -1,16 +1,22 @@
 name: Generate Shorts
+# The cron string in the run title lets run_local.py --if-gh-missed find the run for its own slot
+# (all six crons share this workflow; on 2026-10-25 another slot's run hid a missing one).
+run-name: "Generate Shorts${{ github.event_name == 'schedule' && format(' [{0}]', github.event.schedule) || (inputs.campaign && format(' [{0}]', inputs.campaign)) || '' }}"
 
 on:
-  # GitHub often starts scheduled runs 1-2+ hours late, so each cron starts ~3h before its
-  # campaign's publish slot (src/campaigns.py publish_slots_et, US Eastern) and the upload
-  # is scheduled to go public exactly at the slot (see WHOP_HANDOFF.md).
+  # GitHub starts scheduled runs late (4.6 h on 2026-10-25), so each cron fires ~6 h before its
+  # campaign's publish slot in EDT (~7 h in EST; src/campaigns.py publish_slots_et, US Eastern).
+  # The upload is scheduled with publishAt, so an early render still goes public at the slot.
+  # Minutes avoid :00/:15/:30/:45, when GitHub's scheduler is busiest.
+  # When a cron string changes, change it in CAMPAIGN / PUBLISH_SLOT below, WHOP_HANDOFF.md and
+  # scripts/register_fallback_tasks.ps1 (--if-gh-missed) too.
   schedule:
-    - cron: '45 19 * * *'   # milkxp     -> 18:45 ET
-    - cron: '45 20 * * *'   # milkxp     -> 19:45 ET
-    - cron: '0 21 * * *'    # markmanson -> 20:00 ET
-    - cron: '0 22 * * *'    # unpacked   -> 21:00 ET
-    - cron: '30 23 * * *'   # ladbible   -> 22:30 ET
-    - cron: '15 0 * * *'    # ladbible   -> 23:15 ET
+    - cron: '42 16 * * *'   # milkxp     -> 18:45 ET (22:45 UTC EDT / 23:45 UTC EST)
+    - cron: '42 17 * * *'   # milkxp     -> 19:45 ET (23:45 / 00:45)
+    - cron: '57 17 * * *'   # markmanson -> 20:00 ET (00:00 / 01:00)
+    - cron: '57 18 * * *'   # unpacked   -> 21:00 ET (01:00 / 02:00)
+    - cron: '27 20 * * *'   # ladbible   -> 22:30 ET (02:30 / 03:30)
+    - cron: '12 21 * * *'   # ladbible   -> 23:15 ET (03:15 / 04:15)
   workflow_dispatch:
     inputs:
       campaign:
@@ -124,13 +130,14 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/huggingface/hub
-          key: hf-whisper-${{ github.event.inputs.whisper_model || 'medium' }}-pyannote-3.1-v2
+          key: hf-whisper-${{ github.event.inputs.whisper_model || 'medium' }}-medium.en-pyannote-3.1-v2
 
       - name: Pre-download models
         run: python src/preload_models.py
         env:
           HF_TOKEN:      ${{ secrets.HF_TOKEN }}
           WHISPER_MODEL: ${{ github.event.inputs.whisper_model || 'medium' }}
+          WHISPER_TALK_MODEL: 'medium.en'
 
       - name: Write YouTube token
         env:
@@ -150,12 +157,14 @@ jobs:
           GH_TOKEN:                    ${{ github.token }}
           SPREADSHEET_ID:              '1d-GID8JCIrw89ygIKXfsyT9Fe0qtxxmsUaKORuDliOM'
           # Scheduled runs can't pass inputs, so the cron slot decides the campaign.
-          CAMPAIGN: ${{ github.event.inputs.campaign || (github.event.schedule == '45 19 * * *' && 'milkxp') || (github.event.schedule == '45 20 * * *' && 'milkxp') || (github.event.schedule == '0 21 * * *' && 'markmanson') || (github.event.schedule == '0 22 * * *' && 'unpacked') || (github.event.schedule == '30 23 * * *' && 'ladbible') || (github.event.schedule == '15 0 * * *' && 'ladbible') || 'markmanson' }}
+          CAMPAIGN: ${{ github.event.inputs.campaign || (github.event.schedule == '42 16 * * *' && 'milkxp') || (github.event.schedule == '42 17 * * *' && 'milkxp') || (github.event.schedule == '57 17 * * *' && 'markmanson') || (github.event.schedule == '57 18 * * *' && 'unpacked') || (github.event.schedule == '27 20 * * *' && 'ladbible') || (github.event.schedule == '12 21 * * *' && 'ladbible') || 'markmanson' }}
           VIDEO_FILE_ID:               ${{ github.event.inputs.video_file_id }}
           EPISODE_NAME:                ${{ github.event.inputs.episode_name }}
           # Campaigns with two daily slots: pin each cron to its own slot.
-          PUBLISH_SLOT:                ${{ (github.event.schedule == '45 19 * * *' && '18:45') || (github.event.schedule == '45 20 * * *' && '19:45') || (github.event.schedule == '30 23 * * *' && '22:30') || (github.event.schedule == '15 0 * * *' && '23:15') || '' }}
+          PUBLISH_SLOT:                ${{ (github.event.schedule == '42 16 * * *' && '18:45') || (github.event.schedule == '42 17 * * *' && '19:45') || (github.event.schedule == '27 20 * * *' && '22:30') || (github.event.schedule == '12 21 * * *' && '23:15') || '' }}
           WHISPER_MODEL:               ${{ github.event.inputs.whisper_model || 'medium' }}
+          # talk / podcast campaigns try this first, WHISPER_MODEL is the fallback (campaigns.whisper_models)
+          WHISPER_TALK_MODEL:          'medium.en'
           # remotion/ was installed above (or that failed): never npm ci mid-run, fall back to ASS
           REMOTION_AUTO_INSTALL:       '0'
           VIDEOS_FOLDER_ID:  '1bIFaNpfBy1Bp9R14T22EV-hMsYYrLeTS'

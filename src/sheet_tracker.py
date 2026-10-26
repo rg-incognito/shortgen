@@ -190,6 +190,19 @@ class SheetTracker:
                     return True
         return False
 
+    def get_bookings(self):
+        """Every PostingTracker row with a scheduled_at: [{'episode', 'when' (ISO), 'video_id'}]."""
+        rows = self._svc.spreadsheets().values().get(
+            spreadsheetId=self._sid, range=f'{_POSTING_SHEET}!A:K',
+        ).execute(num_retries=5).get('values', [])
+        out = []
+        for row in rows[1:]:
+            if len(row) >= 10 and row[9]:
+                url = row[10].strip() if len(row) > 10 else ''
+                vid = url.rsplit('/', 1)[-1] if url.startswith('https://youtu.be/') else None
+                out.append({'episode': row[0], 'when': row[9], 'video_id': vid or None})
+        return out
+
     def _posting_rows(self):
         self._ensure_posting_sheet()
         return self._svc.spreadsheets().values().get(
