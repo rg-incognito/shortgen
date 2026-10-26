@@ -494,7 +494,7 @@ _JARGON = re.compile(
     r"\b(aversion|averse|definition|defined|ego|paradigm|framework|cognitive|psycholog\w*|dopamine|"
     r"neuro\w*|concept\w*|fundamental(ly)?|essential(ly)|inherent(ly)?|mechanism|dichotomy|heuristic|"
     r"phenomen\w+|construct|existential|theoretical(ly)?|hypothes\w+|correlat\w+|metric|optimi[sz]\w*|"
-    r"abstract(ly)?|ideolog\w*|philosoph\w*)\b",
+    r"abstract(ly)?|ideolog\w*|philosoph\w*|asymmetr\w*|valence|cognition|bias(es)?)\b",
     re.IGNORECASE)
 _PERSON = re.compile(
     r"\b(i|i'm|i've|i'd|me|my|you|your|you're|he|she|him|her|his|we|our|they|them|their|someone|"

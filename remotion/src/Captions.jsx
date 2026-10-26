@@ -39,7 +39,7 @@ const useLocalFont = () => {
 
 const POP = {damping: 11, stiffness: 260, mass: 0.6};
 
-const Word = ({w, t, fps, active, base, activeColour, fontPx, strokePx}) => {
+const Word = ({w, t, fps, active, base, activeColour, fontPx, strokePx, gap = 0.2}) => {
   const age = Math.max(0, (t - w.t) * fps);
   const lift = active ? spring({frame: age, fps, config: POP, durationInFrames: 6}) : 0;
   const scale = 1 + 0.10 * lift;
@@ -54,7 +54,7 @@ const Word = ({w, t, fps, active, base, activeColour, fontPx, strokePx}) => {
         WebkitTextStroke: `${strokePx * 2}px #000`,
         paintOrder: 'stroke fill',
         textShadow: `0 ${Math.round(strokePx * 0.7)}px ${Math.round(strokePx * 0.9)}px rgba(0,0,0,0.55)`,
-        margin: `0 ${Math.round(fontPx * 0.2)}px`,
+        margin: `0 ${Math.round(fontPx * gap)}px`,
         fontSize: fontPx,
         lineHeight: 1.12,
       }}
@@ -115,7 +115,7 @@ export const Captions = (props) => {
             {line.map((w) => {
               k += 1;
               return (
-                <Word key={k} w={w} t={t} fps={fps} active={k === active}
+                <Word key={k} w={w} t={t} fps={fps} active={k === active} gap={edit ? 0.1 : 0.2}
                   base={props.colors.base} activeColour={props.colors.active}
                   fontPx={props.font_px} strokePx={props.stroke_px} />
               );

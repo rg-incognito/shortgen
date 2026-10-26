@@ -623,7 +623,7 @@ def _flash_times(marks, parts, payoff_out, total):
         joins = [t for t in joins if 1.0 <= t <= total - 1.0 and all(abs(t - o) >= _FLASH_GAP_S for o in out)]
         if joins:
             out.append(joins[0])
-    return sorted(out)[:2]
+    return [round(t, 3) for t in sorted(out)[:2]]
 
 
 def _flash_frames(part, flashes):
