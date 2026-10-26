@@ -35,10 +35,19 @@ CAP_RANGE = (60, 68)
 # memory and decode time; results are reported in 1080x1920 canvas px.
 QS = 2
 HARD_FAILS = ('black_bars', 'static_band', 'overlay_below_safe', 'loudness', 'burned_text_0_8',
-              'watermark_missing', 'watermark_unsafe')
+              'watermark_missing', 'watermark_unsafe', 'no_face_open', 'text_under_captions')
 # Hard fails that break the frame itself: the render gets one blurred-fill re-render,
 # and if that still fails it is never uploaded (main picks another moment or skips).
 LAYOUT_FAILS = ('black_bars', 'static_band')
+# Edit-layer hook fails (P0-3, ctx['edit']['hook_qa']): no face in the first 1.5 s, or the
+# source's own text under our caption line in 0-3 s. Only another moment fixes them, so main
+# re-selects (main.HOOK_FAILS) and never uploads that render.
+HOOK_FAILS = ('no_face_open', 'text_under_captions')
+OPEN_FACE_S = 1.5
+TEXT_UNDER_CAPTIONS_S = 3.0
+CAPTION_BAND_HALF = 70       # px either side of the caption centre that our line covers
+# Edit-layer pace targets (EDIT_SPEC R1): first cut by 2.0 s, no framing held over 3.5 s.
+PACE_FIRST_CUT, PACE_LONGEST = 2.0, 3.5
 # A watermark frame counts as drawn when this share of its box differs from the clean picture
 # (the logo's glyphs, outline and shadow cover ~40-60% of the box; the enhance pass alone ~0%).
 WM_DIFF, WM_MIN_SHARE, WM_MIN_FRAMES = 40, 0.08, 0.95
@@ -253,6 +262,52 @@ def face_metrics(frames, window=None):
             'two_face_frames': two, 'two_face_both_inside': round(both_in / two, 3) if two else None}
 
 
+def open_faces(path, upto=OPEN_FACE_S, fps=4):
+    """Frames (of the first `upto` s, sampled at fps) with at least one face; (n_faces, n_frames)."""
+    try:
+        import mediapipe as mp
+        from reframer import _create_face_landmarker
+    except Exception as exc:
+        return None, str(exc)
+    p = subprocess.run(['ffmpeg', '-v', 'error', '-t', f'{upto + 0.01:.2f}', '-i', path, '-an', '-vf',
+                        f'fps={fps},scale={W // QS}:{H // QS}', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+                       capture_output=True)
+    size = (W // QS) * (H // QS) * 3
+    frames = [np.frombuffer(p.stdout[k * size:(k + 1) * size], np.uint8).reshape(H // QS, W // QS, 3)
+              for k in range(len(p.stdout) // size)]
+    lm = _create_face_landmarker()
+    hits = 0
+    try:
+        for fr in frames:
+            res = lm.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(fr)))
+            if not res.face_landmarks:
+                # small faces in a wide shot: the tiled second pass the reframer uses
+                from reframer import _detect_tiled
+                if not _detect_tiled(lm, np.ascontiguousarray(fr)):
+                    continue
+            hits += 1
+    finally:
+        lm.close()
+    return hits, len(frames)
+
+
+def text_under_captions(clean, caption_y, upto=TEXT_UNDER_CAPTIONS_S, half=CAPTION_BAND_HALF):
+    """Source text lines (textguard, persistent >= 0.5 s) in 0-upto s of the clean picture whose
+    rows overlap our caption line (caption_y +- half px). [(t, y0, y1)] in canvas px."""
+    from textguard import text_boxes
+    out = []
+    for t, (x0, y0, x1, y1) in text_boxes(clean, 0.0, upto):
+        a, b = y0 * H, y1 * H
+        if a < caption_y + half and b > caption_y - half:
+            out.append((round(t, 2), int(a), int(b)))
+    return out
+
+
+def _flash_samples(flashes, n, pad=(0.12, 0.35)):
+    """Indexes of 1 fps samples that land inside a flash wash (left out of the overlay checks)."""
+    return {k for k in range(n) for T in flashes or () if T - pad[0] <= k <= T + pad[1]}
+
+
 # --- main entry ----------------------------------------------------------------
 
 def run(path, ctx=None, write=True):
@@ -294,6 +349,25 @@ def run(path, ctx=None, write=True):
         qa['mid_word_joins'] = mid_word_joins(ctx.get('joins') or [], words)
     qa.update(band_checks(path))
 
+    edit = ctx.get('edit') or {}
+    if edit:
+        # edit layer: cuts (scene cuts + the plan's reframe cuts), flashes, SFX, as planned
+        raw_ev = sorted(set(c for c in cuts if c > 0.05) | set(c for c in edit.get('edit_cuts') or [] if c > 0.05))
+        events = []
+        for c in raw_ev:            # a whip pan / light leak fires the detectors frame after frame: one cut
+            if not events or c - events[-1] >= 0.3:
+                events.append(c)
+        qa['first_cut'] = round(events[0], 2) if events else None
+        # the plan's own cuts count as edit events: its frame-difference detector catches cuts
+        # between similar shots (a white set) that the ffmpeg scene score above misses
+        raw = qa.get('longest_scene_shot', qa['longest_shot'])
+        qa.update(shot_stats(events, dur))
+        qa['longest_scene_shot'] = raw
+        qa['flashes'] = edit.get('flashes') or []
+        qa['sfx'] = [[e.get('kind'), e.get('t')] for e in edit.get('sfx') or []]
+        if dur > 0:
+            qa['sfx_per_10s'] = round(len(qa['sfx']) * 10.0 / dur, 2)
+
     final1 = _decode(path, 1, W // QS, H // QS)
     clean = ctx.get('clean_video')
     clean1 = _decode(clean, 1, W // QS, H // QS) if clean else None
@@ -301,14 +375,19 @@ def run(path, ctx=None, write=True):
     # clean diff there is not an overlay: 1 fps samples inside the seam are left out
     seam = float(ctx.get('loop_seam') or 0)
     n_ov = len(final1) if not seam else max(1, int(dur - seam - 0.5) + 1)
+    # ...and so are samples inside a flash wash (the wash is in the clean picture, our
+    # overlays are drawn over it: the logo's contrast against the wash is not its own)
+    skip = _flash_samples(edit.get('flashes'), n_ov)
+    keep = [k for k in range(n_ov) if k not in skip]
     if clean1:
-        ov, boxes = overlay_checks(final1[:n_ov], clean1[:n_ov], ctx.get('allowed_boxes') or ())
+        f_ov, c_ov = [final1[k] for k in keep if k < len(final1)], [clean1[k] for k in keep if k < len(clean1)]
+        ov, boxes = overlay_checks(f_ov, c_ov, ctx.get('allowed_boxes') or ())
         qa.update(ov)
     wm = ctx.get('watermark_box')
     if wm:
         qa['watermark_box'] = [int(v) for v in wm]
         if clean1:
-            qa.update(watermark_checks(final1[:n_ov], clean1[:n_ov], wm))
+            qa.update(watermark_checks(f_ov, c_ov, wm))
     # caption size / position: median over the 1 fps frames of 1-8 s (one
     # frame can be thrown by burned-in text or a frame with no caption up)
     ty = ctx.get('caption_y')
@@ -339,6 +418,20 @@ def run(path, ctx=None, write=True):
         qa['burned_text'] = [list(h) for h in hits]
     except Exception as exc:
         qa['burned_text_error'] = str(exc)
+
+    if edit.get('hook_qa'):
+        # P0-3: the opening frame must show a face, and the source's own text must not sit
+        # under our caption line in the first 3 s (the "$30,000" title under "IT WAS $30")
+        try:
+            n, of = open_faces(clean or path)
+            qa['open_face_frames'] = [n, of] if n is not None else None
+        except Exception as exc:
+            qa['open_face_error'] = str(exc)
+        if clean and ctx.get('caption_y'):
+            try:
+                qa['text_under_captions'] = text_under_captions(clean, int(ctx['caption_y']))
+            except Exception as exc:
+                qa['text_under_captions_error'] = str(exc)
 
     qa['hard_fail'], qa['warnings'] = evaluate(qa, ctx)
     qa['ok'] = not qa['hard_fail']
@@ -374,6 +467,21 @@ def evaluate(qa, ctx):
         target = warn if niche == 'B' or ctx.get('burned_text_ok') else hard
         target.append(f"burned_text_0_8: {qa['burned_text']}")
 
+    of = qa.get('open_face_frames')
+    if of and of[1] and of[0] == 0:
+        hard.append(f"no_face_open: no face in the first {OPEN_FACE_S:g} s ({of[1]} frames)")
+    if qa.get('text_under_captions'):
+        hard.append(f"text_under_captions: source text under the caption line in 0-{TEXT_UNDER_CAPTIONS_S:g} s "
+                    f"{qa['text_under_captions'][:3]}")
+    edit = ctx.get('edit') or {}
+    if edit.get('pace'):
+        if qa.get('first_cut') is None or qa['first_cut'] > PACE_FIRST_CUT + 0.05:
+            warn.append(f"first cut at {qa.get('first_cut')} s (pace: by {PACE_FIRST_CUT:g} s)")
+        if qa.get('longest_shot', 0) > PACE_LONGEST + 0.3:
+            warn.append(f"pace: a framing held {qa['longest_shot']:.2f} s (> {PACE_LONGEST:g} s)")
+    if qa.get('sfx_per_10s', 0) > 3.0:
+        warn.append(f"{qa['sfx_per_10s']} SFX per 10 s (> 3)")
+
     if qa.get('true_peak', -99) > -1.8:
         warn.append(f"true peak {qa['true_peak']:.1f} dBTP")
     if qa.get('normalization_type') and qa['normalization_type'] != 'linear':
@@ -400,7 +508,7 @@ def evaluate(qa, ctx):
     if qa.get('overlay_rail_px', 0) > 200:
         warn.append(f"overlay in the right rail ({qa['overlay_rail_px']} px)")
     if qa.get('face_frames'):
-        if template in ('B1', 'A2') and not 0.21 <= qa['face_h'] <= 0.29:
+        if template in ('B1', 'A2', 'B1H') and not 0.21 <= qa['face_h'] <= 0.29:
             warn.append(f"face height {qa['face_h']}")
         if template == 'A1' and qa['face_h'] < 0.17:
             warn.append(f"face height {qa['face_h']} (< 0.17)")

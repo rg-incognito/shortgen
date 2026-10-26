@@ -39,7 +39,7 @@ const useLocalFont = () => {
 
 const POP = {damping: 11, stiffness: 260, mass: 0.6};
 
-const Word = ({w, t, fps, active, base, activeColour, fontPx, strokePx}) => {
+const Word = ({w, t, fps, active, base, activeColour, fontPx, strokePx, gap = 0.2}) => {
   const age = Math.max(0, (t - w.t) * fps);
   const lift = active ? spring({frame: age, fps, config: POP, durationInFrames: 6}) : 0;
   const scale = 1 + 0.10 * lift;
@@ -54,7 +54,7 @@ const Word = ({w, t, fps, active, base, activeColour, fontPx, strokePx}) => {
         WebkitTextStroke: `${strokePx * 2}px #000`,
         paintOrder: 'stroke fill',
         textShadow: `0 ${Math.round(strokePx * 0.7)}px ${Math.round(strokePx * 0.9)}px rgba(0,0,0,0.55)`,
-        margin: `0 ${Math.round(fontPx * 0.2)}px`,
+        margin: `0 ${Math.round(fontPx * gap)}px`,
         fontSize: fontPx,
         lineHeight: 1.12,
       }}
@@ -74,16 +74,30 @@ export const Captions = (props) => {
     return <AbsoluteFill style={{backgroundColor: 'transparent'}} />;
   }
   const words = chunk.lines.flat();
+  // edit layer (props.style 'edit', EDIT_SPEC R3): no moving word highlight, only the chunk's
+  // keyword keeps its colour; the chunk pops in 0.85 -> 1.0 over 80 ms (ease-out, no bounce)
+  // and fades in over 60 ms.
+  const edit = props.style === 'edit';
   // active word: the last one already revealed
   let active = -1;
-  words.forEach((w, i) => {
-    if (t >= w.t) active = i;
-  });
-  const enter = spring({frame: Math.max(0, (t - chunk.start) * fps), fps, config: POP, durationInFrames: 7});
-  const pop = interpolate(enter, [0, 1], [0.78, 1.0]);
+  if (!edit) {
+    words.forEach((w, i) => {
+      if (t >= w.t) active = i;
+    });
+  }
+  const since = Math.max(0, t - chunk.start);
+  let pop;
   let opacity = 1;
+  if (edit) {
+    const p = Math.min(1, since / 0.08);
+    pop = 0.85 + 0.15 * (1 - Math.pow(1 - p, 3));
+    opacity = Math.min(1, since / 0.06);
+  } else {
+    const enter = spring({frame: since * fps, fps, config: POP, durationInFrames: 7});
+    pop = interpolate(enter, [0, 1], [0.78, 1.0]);
+  }
   if (chunk.fade_out && props.seam_s > 0) {
-    opacity = interpolate(t, [props.total_s - props.seam_s, props.total_s], [1, 0],
+    opacity *= interpolate(t, [props.total_s - props.seam_s, props.total_s], [1, 0],
       {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
   }
   let k = -1;
@@ -101,7 +115,7 @@ export const Captions = (props) => {
             {line.map((w) => {
               k += 1;
               return (
-                <Word key={k} w={w} t={t} fps={fps} active={k === active}
+                <Word key={k} w={w} t={t} fps={fps} active={k === active} gap={edit ? 0.1 : 0.2}
                   base={props.colors.base} activeColour={props.colors.active}
                   fontPx={props.font_px} strokePx={props.stroke_px} />
               );

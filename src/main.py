@@ -17,7 +17,7 @@ from drive_client import (download_video, upload_shorts, pick_video, pick_from_f
 from transcriber import transcribe_video
 from analyzer import (analyze_candidates, generate_yt_metadata, build_sentences, build_candidate,
                       hook_problems, overlap_problems, rank_score, later_start, rubric_points, story_offset,
-                      trim_filler_opener, layer_line, HOOK_CLASSES, PAYOFF_MAX_TAIL, GENRES)
+                      trim_filler_opener, layer_line, HOOK_CLASSES, PAYOFF_MAX_TAIL, GENRES, length_trim)
 from clipper import create_story_short, edited_duration
 from sheet_tracker import SheetTracker, SKIP_PREFIX
 from campaigns import (get_campaign, find_banned, find_transcript_banned, enforce_caption,
@@ -26,7 +26,8 @@ from campaigns import (get_campaign, find_banned, find_transcript_banned, enforc
                        render_config, length_plan, story_max_seconds, layer_caps, rubric_gate, clip_text,
                        assign_variant, apply_variant, EXPERIMENTS, moment_hints, quote_problems, episode_guest,
                        fallback_layer_lines, layer_line_problem, layer_names, faithful_problems, _EMOJI,
-                       clip_type_for_run, clip_type_hint, comments_allowed, whisper_hints, whisper_models)
+                       clip_type_for_run, clip_type_hint, comments_allowed, whisper_hints, whisper_models,
+                       edit_config, header_on, payoff_max_tail)
 from footage import download_from_release, sponsor_segments
 from scheduling import merge_bookings, slot_filled, start_blocked, choose_publish_time
 
@@ -43,6 +44,27 @@ ARCHIVE_FOLDER_ID = os.environ.get('ARCHIVE_FOLDER_ID', '1nHZCaWO_KvkV52TekkF8ec
 MIN_SCORE = float(os.environ.get('MIN_SCORE') or '7')
 # This many score-gate skips in a row for one campaign fails the job, so the email fires.
 MAX_CONSECUTIVE_SKIPS = 3
+# run_local.py --no-upload: pick, render, QA and write the metadata, then stop. Nothing goes to
+# Drive, YouTube or the tracker sheet (it is only read); the Short, its QA, story and metadata are
+# copied to NO_UPLOAD_DIR (default local_test/output/no_upload).
+NO_UPLOAD = os.environ.get('NO_UPLOAD', '').strip().lower() in ('1', 'true', 'yes')
+
+
+def _save_no_upload(short_path, story, yt_meta, campaign):
+    out = Path(os.environ.get('NO_UPLOAD_DIR') or Path(__file__).parent.parent / 'local_test' / 'output' / 'no_upload')
+    out.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime('%Y%m%d_%H%M%S')
+    dest = out / f"{campaign}_{stamp}.mp4"
+    shutil.copy(short_path, dest)
+    qa = Path(str(short_path) + '.qa.json')
+    if qa.exists():
+        shutil.copy(qa, str(dest) + '.qa.json')
+    keep = {k: v for k, v in story.items() if not k.startswith('_sentences')}
+    with open(str(dest) + '.story.json', 'w', encoding='utf-8') as f:
+        json.dump(keep, f, indent=1, default=str, ensure_ascii=False)
+    with open(str(dest) + '.meta.json', 'w', encoding='utf-8') as f:
+        json.dump(yt_meta or {}, f, indent=1, ensure_ascii=False)
+    print(f"\nNO UPLOAD: saved {dest} (+ .qa.json, .story.json, .meta.json). Nothing was uploaded or logged.")
 
 
 class WeakMomentSkip(Exception):
@@ -179,7 +201,7 @@ def _apply_layers(story, all_words, profile):
     problems = []
     if 'header' in bad:
         why = bad.pop('header')
-        if render_config(profile).get('header'):   # only matters when it is on screen
+        if header_on(profile):   # only matters when it is on screen
             problems.append(f"header echoes the dialogue ({why})")
     for field, why in bad.items():
         print(f"      ~ {story.get('storyline_title', '?')}: dropped {field} ({why})")
@@ -270,8 +292,9 @@ def _v2_problems(story, profile, gate):
         problems.append(f"unknown hook_class {hc!r}")
     elif hc == 'SL':
         problems.append("opens on slow setup (hook_class SL)")
-    if story.get('_payoff_tail', 0) > PAYOFF_MAX_TAIL:
-        problems.append(f"ends {story['_payoff_tail']:.1f}s after the payoff (max {PAYOFF_MAX_TAIL:g}s)")
+    max_tail = payoff_max_tail(profile)
+    if story.get('_payoff_tail', 0) > max_tail:
+        problems.append(f"ends {story['_payoff_tail']:.1f}s after the payoff (max {max_tail:g}s)")
     if (render_config(profile).get('overlays_allowed') and not story.get('_layers')
             and not profile.get('layers_optional')):
         problems.append("no originality layer survived (closing/context line or annotations)")
@@ -294,12 +317,12 @@ def _candidate_problems(story, sents, all_words, used, profile, video_path=None,
         problems.append(f"too short after trimming ({dur:.1f}s < {lo}s)")
     if hi and dur > hi:
         problems.append(f"too long after trimming ({dur:.1f}s > {hi:g}s)")
-    problems += hook_problems(story, sents, all_words)
+    problems += _hook_problems(story, sents, all_words, profile)
     # Code-side dedupe: the LLM is told the used segments but not trusted with them.
     problems += overlap_problems(story['clips'], used)
     # The header is read in frame 0: no vague tease, no payoff word, no banned term, no reused opener.
     # A campaign that shows no header only keeps the banned-term check (the text still feeds titles/logs).
-    if render_config(profile).get('header'):
+    if header_on(profile):
         problems += header_problems(story, profile, prior_headers)
     else:
         banned = find_banned(story.get('header') or '', profile)
@@ -313,7 +336,89 @@ def _candidate_problems(story, sents, all_words, used, profile, video_path=None,
     # Frame scan last and only for otherwise-usable candidates: it is the slow check.
     if not problems:
         problems += _burned_text_problems(story, video_path, attempt, profile)
+    if not problems and edit_config(profile).get('guest_cut'):
+        problems += _guest_cut_problems(story, video_path)
     return problems
+
+
+# Edit-layer rules that may be relaxed so a campaign never ends a run with zero Shorts: the
+# P0-3 opener rejects, P0-5 guest change, the on-screen headline rules (the headline is then
+# hidden) and the P0-1 window, down to the pre-edit-layer limits. Everything else stays hard.
+_SOFT_PREFIXES = ('opens mid-sentence', 'opens on an outro', 'opens on an abstract', 'abstract opener',
+                  'opener leans', 'crosses a cut where the guests change')
+
+
+def _soft_problem(p, profile, used_segments=None):
+    """(soft?, hides the headline?) for one candidate problem string. used_segments: the segments
+    really used by earlier uploads; overlap with a segment only offered earlier in this run is soft."""
+    import re as _re
+    from campaigns import NICHE_LENGTH
+    if p.startswith(_SOFT_PREFIXES):
+        return True, False
+    m = _re.match(r'reuses [\d.]+s of used segment (\d+)-(\d+)s', p)
+    if m and used_segments is not None:
+        s, e = float(m.group(1)), float(m.group(2))
+        return not any(abs(s - a) < 1.0 and abs(e - b) < 1.0 for a, b in used_segments), False
+    if p.startswith('header ') and 'banned' not in p:
+        # soft only where the header is on screen because of the edit layer (A1 showed it before)
+        legacy = bool(render_config(profile).get('header'))
+        return (not legacy or 'describes the clip' in p), not legacy
+    m = _re.match(r'too short after trimming \(([\d.]+)s', p)
+    if m:
+        return float(m.group(1)) >= float(profile.get('brief_min_seconds') or profile.get('min_seconds') or 0), False
+    m = _re.match(r'too long after trimming \(([\d.]+)s', p)
+    if m:
+        niche = NICHE_LENGTH[render_config(profile).get('niche', 'A')]['max']
+        return float(m.group(1)) <= min(profile.get('max_seconds') or niche, niche), False
+    m = _re.match(r'ends ([\d.]+)s after the payoff', p)
+    if m:
+        return float(m.group(1)) <= PAYOFF_MAX_TAIL, False
+    return False, False
+
+
+def _edit_fallback(candidates, profile, min_score, used_segments=()):
+    """
+    The best candidate whose only problems are edit-layer soft rules (and that clears the score
+    gate), marked '_relaxed' (and '_hide_headline' when its header broke an on-screen rule), or None.
+    """
+    best = None
+    for story, problems in candidates:
+        if not problems or story['score'] < min_score:
+            continue
+        judged = [_soft_problem(p, profile, list(used_segments)) for p in problems]
+        if not all(s for s, _ in judged):
+            continue
+        if best is None or story['score'] > best[0]['score']:
+            best = (story, problems, any(h for _, h in judged))
+    if not best:
+        return None
+    story, problems, hide = best
+    story['_relaxed'] = list(problems)
+    if hide:
+        story['_hide_headline'] = True
+    print(f"::warning title=Edit layer fallback::'{story['storyline_title']}' [{story['score']:.1f}] picked with "
+          f"edit-layer rules relaxed ({'; '.join(problems)})" + (' — headline hidden' if hide else ''))
+    return story
+
+
+def _hook_problems(story, sents, all_words, profile):
+    """hook_problems with the edit layer's deterministic opener rejects (P0-3) when it is on."""
+    return hook_problems(story, sents, all_words, strict=bool(edit_config(profile).get('hook_rejects')),
+                         genre=profile.get('genre'))
+
+
+def _guest_cut_problems(story, video_path):
+    """P0-5: the candidate crosses a source cut where the people on screen change (faceid). A guard:
+    any failure of the face pass is a warning, never a reason to lose the run."""
+    if not video_path:
+        return []
+    try:
+        import faceid
+        hit = faceid.guest_change(video_path, story['clips'])
+    except Exception as e:
+        print(f"      Guest-change check skipped: {e}")
+        return []
+    return [hit] if hit else []
 
 
 def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storylines,
@@ -345,13 +450,15 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
         raws = analyze_candidates(sents, gemini_api_key, used_segments=avoid,
                                   used_storylines=used_storylines, campaign=campaign, limits=limits,
                                   target=target, genre=genre, recent_headers=list(prior_headers), **hint_kw)
+        if attempt == 1:
+            everything = []                  # every candidate of every attempt (edit-layer fallback)
         ranked, used = [], list(avoid)   # candidates of one answer may overlap each other
         for raw in raws:
-            story, problems = build_candidate(raw, sents, all_words)
+            story, problems = build_candidate(raw, sents, all_words, max_tail=payoff_max_tail(profile))
             if not story:
                 print(f"      - unusable candidate {raw.get('storyline_title', '?')}: {'; '.join(problems)}")
                 continue
-            if not render_config(profile).get('header'):
+            if not header_on(profile):
                 problems = [p for p in problems if p != 'missing header']
             if _trims_filler(profile):
                 trimmed = trim_filler_opener(story, sents, all_words)
@@ -359,11 +466,12 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
                     print(f"      ~ {story['storyline_title']}: trimmed filler \"{trimmed['_filler_trim']}\" -> "
                           f"\"{trimmed['opening_line'][:50]}\"")
                     story = trimmed
-            if story['_v2'] and (story.get('hook_class') == 'SL' or hook_problems(story, sents, all_words)):
+            if story['_v2'] and (story.get('hook_class') == 'SL'
+                                 or _hook_problems(story, sents, all_words, profile)):
                 alt = later_start(story, sents, all_words)
                 if alt and _trims_filler(profile):
                     alt = trim_filler_opener(alt, sents, all_words) or alt
-                if alt and not hook_problems(alt, sents, all_words):
+                if alt and not _hook_problems(alt, sents, all_words, profile):
                     a, k = alt['_later_start']
                     print(f"      ~ {story['storyline_title']}: later start S{a} -> S{k} "
                           f"\"{alt['opening_line'][:50]}\" ({alt['hook_class']})")
@@ -371,6 +479,25 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
             for c in story['clips']:
                 c['end_seconds'] = min(c['end_seconds'], src_dur - 0.05)
             dur = edited_duration(story, all_words, profile['silence_thresh'], **dur_kwargs)
+            if edit_config(profile).get('length') and dur > target[1] + 0.05:
+                # P0-1: over the target -> start later on a clean sentence (the payoff stays last):
+                # the first start that lands in the target window, else the first under the cap
+                lo_ = profile.get('min_seconds') or 0.0
+                cut = None
+                for hi_ in (target[1], story_max_seconds(story, profile)):
+                    def fits(s, hi_=hi_):
+                        s['_dur_try'] = edited_duration(s, all_words, profile['silence_thresh'], **dur_kwargs)
+                        return (lo_ <= s['_dur_try'] <= hi_ + 0.05
+                                and not _hook_problems(s, sents, all_words, profile))
+                    if dur > hi_ + 0.05:
+                        cut = length_trim(story, sents, all_words, fits)
+                    if cut:
+                        break
+                if cut:
+                    a_, k_ = cut['_length_trim']
+                    print(f"      ~ {story['storyline_title']}: {dur:.1f}s > {hi_:g}s, starts later S{a_} -> S{k_} "
+                          f"\"{cut['opening_line'][:50]}\" ({cut['_dur_try']:.1f}s)")
+                    story, dur = cut, cut['_dur_try']
             story['_edited_seconds'] = round(dur, 1)
             story['_max_seconds'] = story_max_seconds(story, profile)
             problems += _apply_layers(story, all_words, profile)
@@ -396,6 +523,7 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
             avoid += [seg for seg in ((c['start_seconds'], c['end_seconds']) for c in story['clips'])
                       if seg not in avoid]
         ranked.sort(key=lambda sp: sp[0]['score'], reverse=True)
+        everything += ranked
 
         print(f"      Attempt {attempt}: {len(ranked)} candidate(s)")
         for story, problems in ranked:
@@ -421,6 +549,10 @@ def _pick_story(segments, all_words, gemini_api_key, used_segments, used_storyli
         if passing and (not best_weak or passing[0]['score'] > best_weak['score']):
             best_weak = passing[0]
 
+    if not best_weak and any(edit_config(profile).get(k) for k in ('hook_rejects', 'guest_cut', 'headline', 'length')):
+        fb = _edit_fallback(everything, profile, min_score, used_segments)
+        if fb:
+            return fb
     if best_weak:
         err = WeakMomentSkip(f"best usable moment '{best_weak['storyline_title']}' scored "
                              f"{best_weak['score']:.1f} < {min_score:g}")
@@ -584,6 +716,15 @@ def _qa_burned_text(qa):
     return any(str(f).startswith('burned_text') for f in (qa or {}).get('hard_fail') or [])
 
 
+# Edit-layer hook fails (P0-3, render_qa.HOOK_FAILS): no face in the first 1.5 s, or source text
+# under our captions in 0-3 s. Only another moment fixes them: that render is never uploaded.
+HOOK_FAILS = ('no_face_open', 'text_under_captions')
+
+
+def _qa_hook_failed(qa):
+    return [str(f) for f in (qa or {}).get('hard_fail') or [] if str(f).split(':')[0] in HOOK_FAILS]
+
+
 def _qa_layout_broken(qa):
     """The render QA's layout-breaking hard fails (black bars, static band) — never uploaded."""
     return [str(f) for f in (qa or {}).get('hard_fail') or [] if str(f).split(':')[0] in LAYOUT_FAILS]
@@ -665,9 +806,12 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
         story['variant'] = variant
         apply_variant(story, variant)
         render = dict(render, template=variant['template'])
+        if story.get('_hide_headline'):
+            # edit-layer fallback: this header broke an on-screen rule, so no headline on this Short
+            render = dict(render, edit=dict(edit_config(render), headline=False))
         render_kwargs = dict(_render_kwargs(render), **_accepted(create_story_short, qa_retry=qa_retry))
-        if render_kwargs and variant['template'] == 'A1':
-            story['hook_emoji'] = ''   # the A1 header carries no emoji
+        if render_kwargs and variant['template'] == 'A1' and not edit_config(render).get('headline'):
+            story['hook_emoji'] = ''   # the A1 header carries no emoji (the edit headline may carry one)
         print(f"      Variant: {variant} experiments={story['_experiments'] or 'none'}"
               f"{'' if render_kwargs else ' (renderer has no render= yet: current look)'}")
         _print_story(story)
@@ -687,7 +831,13 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
         if (qa or {}).get('qa_retry'):
             qa_retry = False
         broken = _qa_layout_broken(qa)
-        if not _qa_burned_text(qa) and not broken:
+        hook = _qa_hook_failed(qa)
+        if hook and not broken and not _qa_burned_text(qa) and round_ == MAX_RESELECT:
+            # edit-layer hook fails never leave a campaign with zero Shorts: the last pick uploads
+            print(f"::warning title=Edit layer fallback::{episode_name} '{story['storyline_title']}' uploads "
+                  f"despite the hook QA ({'; '.join(hook)}): the re-pick failed it too")
+            hook = []
+        if not _qa_burned_text(qa) and not broken and not hook:
             other = [f for f in (qa or {}).get('hard_fail') or []]
             if other:
                 # Uploaded anyway while QA is new (a false positive must not stop uploads).
@@ -695,19 +845,22 @@ def _select_and_render(tracker, campaign, profile, episode_name, run, segments, 
                       f"uploads with QA hard fails: {'; '.join(map(str, other))}")
             return story, short_path, qa
         rejected += [(c['start_seconds'], c['end_seconds']) for c in story['clips']]
-        why = 'burned-in text' if _qa_burned_text(qa) else f"a broken frame ({'; '.join(broken)})"
-        reasons.append('burned text' if _qa_burned_text(qa) else 'layout')
+        why = ('burned-in text' if _qa_burned_text(qa) else f"a broken frame ({'; '.join(broken)})" if broken
+               else f"a weak opening frame ({'; '.join(hook)})")
+        reasons.append('burned text' if _qa_burned_text(qa) else 'layout' if broken else 'hook')
         print(f"::warning title=Render QA::{episode_name} '{story['storyline_title']}' NOT uploaded: "
               f"render QA found {why}")
         if round_ < MAX_RESELECT:
             print(f"      Picking another moment ({round_ + 1}/{MAX_RESELECT})")
     what = ('showed burned-in text' if set(reasons) == {'burned text'} else
             'had a broken frame (black bars / static band)' if set(reasons) == {'layout'} else
-            'failed the render QA (burned-in text or a broken frame)')
+            'opened without a face or with source text under the captions' if set(reasons) == {'hook'} else
+            'failed the render QA (burned-in text, a broken frame or a weak opening frame)')
     skip = WeakMomentSkip(f"every pick ({MAX_RESELECT + 1}) {what} in the render QA")
     skip.segments, skip.score = rejected, story['score']
     skip.kind = ('render QA burned text' if set(reasons) == {'burned text'} else
-                 'render QA layout' if set(reasons) == {'layout'} else 'render QA')
+                 'render QA layout' if set(reasons) == {'layout'} else
+                 'render QA hook' if set(reasons) == {'hook'} else 'render QA')
     raise skip
 
 
@@ -792,8 +945,11 @@ def main():
     if slot and not video_file_id:
         blocked = start_blocked(campaign, profile, nominal, _bookings(tracker), pinned=bool(pinned_slot))
         if blocked:
-            print(f"{campaign} {nominal} slot: {blocked} — nothing to do.")
-            sys.exit(0)
+            if NO_UPLOAD:
+                print(f"{campaign} {nominal} slot: {blocked} — rendering anyway (no-upload run)")
+            else:
+                print(f"{campaign} {nominal} slot: {blocked} — nothing to do.")
+                sys.exit(0)
 
     diarization_pipeline = None
     if hf_token:
@@ -838,7 +994,12 @@ def main():
         video_path = work_dir / f"{episode_name}.mp4"
 
         print("[1/5] Downloading video...")
-        if profile['source'] == 'release':
+        local_video = os.environ.get('LOCAL_VIDEO', '').strip()
+        if local_video:
+            # run_local --video: a copy of the footage already on this PC (no download)
+            video_path = Path(local_video)
+            print(f"      Local footage: {video_path}")
+        elif profile['source'] == 'release':
             download_from_release(profile['release_tag'], f"{video_file_id}.mp4", str(video_path))
         else:
             download_video(video_file_id, str(video_path), service_account_info)
@@ -872,6 +1033,8 @@ def main():
             used = info.get('model', models[0])
             print(f"      {len(segments)} segments, {len(all_words)} words transcribed (whisper-{used})")
             try:
+                if NO_UPLOAD:
+                    raise RuntimeError('no-upload run writes nothing to Drive')
                 save_transcript_cache(f"{episode_name}_{used}{hw_tag}.json", SHORTS_FOLDER_ID,
                                       segments, all_words)
             except Exception as e:
@@ -902,6 +1065,9 @@ def main():
                 avoid_segments, used_storylines, src_dur, video_path, work_dir, prior_headers,
                 diarization_pipeline)
         except WeakMomentSkip as e:
+            if NO_UPLOAD:
+                print(f"\nSKIPPED (no-upload run, nothing logged): {e}")
+                return
             _record_skip(tracker, campaign, episode_name, current_run, e)
             return
 
@@ -918,6 +1084,10 @@ def main():
             if ((profile.get('min_seconds') and final_dur < profile['min_seconds'] - 1) or
                     (max_sec and final_dur > max_sec + 2)):
                 raise RuntimeError(f"Rendered short is {final_dur:.1f}s — outside the {campaign} brief's limits")
+
+        if NO_UPLOAD:
+            _save_no_upload(short_path, story, yt_meta, campaign)
+            return
 
         # Never re-upload: repeat uploads get treated as reused content, seed worse and burn a slot.
         file_sha1 = _sha1(short_path)

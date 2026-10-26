@@ -19,7 +19,13 @@ Templates (layout=, from the profile's render config; 'legacy' = the above):
       the full source width) so both people stay in frame
   A2 / B1  full-bleed 1080x1920; the face is zoomed to ~1/4 of the canvas
       height (capped 1.35x) with the eye line near y 540
+  B1H  B1 with the edit layer's hook headline: a 1080x1620 window at y 300 under
+      a blurred band (the A1 look, so the headline sits in a top bar over no face)
 Frames are never letterboxed with black bars.
+
+Edit layer (clipper's pace plan): zoom_events carry tight reframe cuts (1.3-1.4x of
+the same take, face-centred); zoom_max keeps wide x close under the source's
+resolution limit by easing the wide framing first. flash: a light wash per frame.
 
 Letterboxed sources: black bars baked into the source (a 2.39:1 film inside
 16:9, a 4:3 pillarbox, an episode that letterboxes some segments) are found
@@ -103,6 +109,9 @@ _SPLIT_MIN_CROP = 0.35   # split panel crop height, min fraction of the frame
 A1_WINDOW = (300, 1350)        # y, height of the default 4:5 window
 A1_SQUARE = (420, 1080)        # two-shot window (1:1)
 A1_BAND_MID = 975              # centre of the window band (300..1650)
+B1H_WINDOW = (300, 1620)       # B1 + headline: the picture under the 300 px headline band
+_WINDOWED = ('A1', 'B1H')      # templates that draw a window over a blurred cover
+FLASH_RGB = (255, 243, 214)    # warm cream wash (#FFF3D6), EDIT_SPEC R6
 _A1_ZOOM_MAX = 1.15            # single-face zoom cap inside the A1 window
 _A1_FACE_TARGET = 0.20         # face height / canvas the A1 zoom aims at
 _A1_EYE = 0.30                 # eye line at this share of the window height
@@ -700,6 +709,8 @@ def _plan_template(an, layout, boxes=None):
     total = an['total_frames']
     if layout == 'A1':
         win_y, win_h = A1_WINDOW
+    elif layout == 'B1H':
+        win_y, win_h = B1H_WINDOW
     else:
         win_y, win_h = 0, _OUT_H
     aspect = _OUT_W / win_h
@@ -770,7 +781,7 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
                  output_path: str, pipeline=None, wide_fallback: bool = False,
                  top_reserved: int = 0, zoom: float = 1.0, push_in: bool = False,
                  layout: str = 'legacy', analysis=None, zoom_events=None, push=None,
-                 force_wide: bool = False):
+                 force_wide: bool = False, flash=None, zoom_max=None):
     """
     Produce a video-only 1080x1920 clip of round((end-start)*fps) frames.
 
@@ -789,6 +800,9 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
     push: (start_frame, amount) ease-out push-in reaching 1+amount on the last frame.
     force_wide: the QA layout fallback — every frame is the whole picture over
     a blurred fill, with bars cropped by the looser _BAR_AGREE_LOOSE rule.
+    flash: {frame: opacity} of the edit layer's light wash (FLASH_RGB) on this part.
+    zoom_max: cap on the face zoom x reframe level (edit layer): a part with reframe
+    cuts eases its wide framing so the close one stays under it.
 
     Every shot's letterbox / pillarbox bars are cropped off first (shot_boxes).
 
@@ -809,9 +823,9 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
 
     if force_wide:
         plan, base_cw = [('wide',)] * total_frames, None
-        top_reserved = top_reserved if layout not in ('A1', 'A2', 'B1') else 0
+        top_reserved = top_reserved if layout not in ('A1', 'A2', 'B1', 'B1H') else 0
         content_h = _OUT_H - top_reserved
-    elif layout in ('A1', 'A2', 'B1'):
+    elif layout in ('A1', 'A2', 'B1', 'B1H'):
         plan, base_cw = _plan_template(an, layout, boxes)
         top_reserved, content_h = 0, _OUT_H
     else:
@@ -848,8 +862,14 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
     src_idx = [min(max(fi, head), tail - 1) for fi in range(total_frames)]
 
     events = sorted(zoom_events or [])
+    z_hi = max([lv for _, lv in events] + [1.0])
     canvas = np.zeros((_OUT_H, _OUT_W, 3), dtype=np.uint8)
-    panel_h = content_h // 2
+    # B1H keeps split shots inside the window, under the headline band
+    split_y = B1H_WINDOW[0] if layout == 'B1H' else top_reserved
+    split_h = _OUT_H - split_y if layout == 'B1H' else content_h
+    panel_h = split_h // 2
+    flash = flash or {}
+    wash = np.array(FLASH_RGB[::-1], dtype=np.float32)          # BGR
     face_boxes = []
     frame, read = None, 0
     for fi in range(total_frames):
@@ -877,6 +897,11 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
         src_w, src_h = box[2] - box[0], box[3] - box[1]
         rect = None                      # (x1, y1, cw, ch, out_y, out_h) of a single crop
         if p[0] == 'wide':
+            if z > 1.001:
+                # a reframe cut on a no-face wide shot: a tighter centre crop of the same picture
+                ph, pw = pic.shape[:2]
+                cw_, ch_ = int(round(pw / z)), int(round(ph / z))
+                pic = pic[(ph - ch_) // 2:(ph - ch_) // 2 + ch_, (pw - cw_) // 2:(pw - cw_) // 2 + cw_]
             canvas[top_reserved:] = _blur_fill(pic, _OUT_W, content_h)
         elif p[0] == 'split':
             panels = []
@@ -889,9 +914,11 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
                     cw, ch = float(src_w), src_w * panel_h / _OUT_W
                 panels.append(_face_crop(pic, face['cx'] * src_w, face['cy'] * src_h,
                                          cw, ch, src_w, src_h, _OUT_W, panel_h))
-            content = np.vstack(panels + ([panels[-1][-1:]] * (content_h - 2 * panel_h)))
+            content = np.vstack(panels + ([panels[-1][-1:]] * (split_h - 2 * panel_h)))
             content[panel_h - 2:panel_h + 2] = 0     # thin seam between the faces
-            canvas[top_reserved:] = content
+            if layout == 'B1H':
+                canvas[:split_y] = _bg_cover(pic)[:split_y]
+            canvas[split_y:] = content
         elif p[0] == 'crop':
             cw, ch = p[3] / z, p[4] / z
             canvas[top_reserved:] = _face_crop(pic, p[1], p[2], cw, ch, src_w, src_h,
@@ -900,7 +927,11 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
                     max(0.0, min(p[2] - ch * 0.42, src_h - ch)), cw, ch, top_reserved, content_h)
         else:                                        # 'win' (templates)
             _, cx, ey, zf, wy, wh, cw0, ch0, top = p
-            cw, ch = cw0 / (zf * z), ch0 / (zf * z)
+            if zoom_max and z_hi > 1.0:
+                # wide x close stays under zoom_max: ease the wide framing first, never below 1.0
+                zf = max(1.0, min(zf, zoom_max / z_hi))
+            zz = zf * z if not zoom_max else min(zf * z, max(zoom_max, zf))
+            cw, ch = cw0 / zz, ch0 / zz
             if ey is None:
                 x1 = max(0.0, min(cx - cw / 2, src_w - cw))
                 y1 = max(0.0, (src_h - ch) / 2)
@@ -908,11 +939,14 @@ def reframe_clip(video_path: str, start_sec: float, end_sec: float,
                 x1, y1 = _eye_rect(cx, ey, cw, ch, src_w, src_h,
                                    _A1_EYE if layout == 'A1' else _FB_EYE, top)
             rect = (x1, y1, cw, ch, wy, wh)
-            if layout == 'A1':
+            if layout in _WINDOWED:
                 canvas[:] = _bg_cover(pic)
                 canvas[wy:wy + wh] = _warp(pic, x1, y1, cw, ch, _OUT_W, wh)
             else:
                 canvas[:] = _warp(pic, x1, y1, cw, ch, _OUT_W, _OUT_H)
+        a = flash.get(fi)
+        if a:
+            canvas[:] = (canvas.astype(np.float32) * (1.0 - a) + wash * a).astype(np.uint8)
         proc.stdin.write(canvas.tobytes())
 
         # canvas boxes of the faces sampled on this frame (caption placement)

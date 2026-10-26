@@ -204,6 +204,26 @@ def burned_text(video, start, end, ignore_rows=(), fps=_SAMPLE_FPS, min_persist=
             if b - a >= min_persist - 1e-6]
 
 
+def text_boxes(video, start, end, ignore_rows=(), fps=_SAMPLE_FPS):
+    """
+    [(t, (x0, y0, x1, y1))] text-line boxes as fractions of the frame, for lines that
+    persist into a neighbouring sample (the same rule as burned_text). Render QA uses it
+    on the clean picture to find source text sitting under our caption line.
+    """
+    samples = []
+    W = H = None
+    for t, grey in _frames(video, start, end, fps):
+        H, W = grey.shape
+        samples.append((t, text_lines(grey, ignore_rows)))
+    out = []
+    for k, (t, lines) in enumerate(samples):
+        for ln in lines:
+            if any(0 <= j < len(samples) and any(_iou(ln, o) >= _PERSIST_IOU for o in samples[j][1])
+                   for j in (k - 1, k + 1)):
+                out.append((round(t, 2), (ln[0] / W, ln[1] / H, ln[2] / W, ln[3] / H)))
+    return out
+
+
 if __name__ == '__main__':
     import sys
     v = sys.argv[1]

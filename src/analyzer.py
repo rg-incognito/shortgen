@@ -195,10 +195,12 @@ def _range_from_seconds(sents, start, end):
     return inside[0], inside[-1]
 
 
-def build_candidate(raw, sents, words):
+def build_candidate(raw, sents, words, max_tail=PAYOFF_MAX_TAIL):
     """
     Turn one LLM candidate into a story with exact cut times. Returns
     (story, problems); story is None when its sentence numbers are unusable.
+    max_tail: seconds the last clip may run past the payoff sentence before it is
+    cut back to end on it (the edit layer uses 1.5 s: the payoff is the last sentence).
     """
     clips, ranges, asked = [], [], []
     for c in raw.get('clips') or []:
@@ -235,7 +237,7 @@ def build_candidate(raw, sents, words):
         payoff_k = k
         last_a, last_b = ranges[-1]
         if (last_a <= k < last_b and sents[k]['complete']
-                and sents[last_b]['end'] - sents[k]['end'] > PAYOFF_MAX_TAIL):
+                and sents[last_b]['end'] - sents[k]['end'] > max_tail):
             ranges[-1] = (last_a, k)
             clips[-1]['end_seconds'] = clip_times(sents, words, last_a, k)[1]
 
@@ -349,6 +351,45 @@ def later_start(story, sents, words, max_shift=LATER_START_MAX):
     return None
 
 
+def start_at(story, sents, words, k):
+    """The same story with its first clip started on sentence k (inside that clip)."""
+    a, b = story['_sentences'][0]
+    new = dict(story)
+    new.pop('_open_w', None)
+    new.pop('_filler_trim', None)
+    new['clips'] = [dict(c) for c in story['clips']]
+    new['clips'][0]['start_seconds'] = clip_times(sents, words, k, b)[0]
+    new['_sentences'] = [(k, b)] + list(story['_sentences'][1:])
+    new['opening_line'] = new['_llm_opening'] = sents[k]['text'].strip()
+    new['_llm_start'] = k
+    new['_total_seconds'] = round(sum(c['end_seconds'] - c['start_seconds'] for c in new['clips']), 1)
+    if new.get('payoff_t') is not None and new['_total_seconds']:
+        p_off = story_offset(new['clips'], new['payoff_t'])
+        if p_off is not None:
+            new['_payoff_pos'] = round(p_off / new['_total_seconds'], 2)
+    new['annotations'] = [x for x in story.get('annotations') or []
+                          if story_offset(new['clips'], x['t']) is not None]
+    return new
+
+
+def length_trim(story, sents, words, fits):
+    """
+    Edit layer (P0-1): a moment that runs over the length cap starts later instead of being
+    thrown away. Tries the first clip's later sentences that start a new thought, in order,
+    and returns the first story for which fits(story) is True (fits checks the edited length
+    and the opener rules), or None. The payoff end is never touched.
+    """
+    a, b = story['_sentences'][0]
+    for k in range(a + 1, b + 1):
+        if not sents[k].get('clean_start', True):
+            continue
+        new = start_at(story, sents, words, k)
+        new['_length_trim'] = (a, k)
+        if fits(new):
+            return new
+    return None
+
+
 def _words_of(text):
     return re.findall(r"[a-z0-9']+", (text or '').lower())
 
@@ -405,8 +446,9 @@ def _quotes(claimed, actual):
     return sum(w in aw for w in cw) / len(cw) >= 0.6
 
 
-def hook_problems(story, sents, words):
-    """Reasons the opening will not hold a scrolling viewer (empty list = fine)."""
+def hook_problems(story, sents, words, strict=False, genre=None):
+    """Reasons the opening will not hold a scrolling viewer (empty list = fine).
+    strict (edit layer hook_rejects, P0-3): also the deterministic opener rejects."""
     problems = []
     a = story['_sentences'][0][0]
     w0 = story.get('_open_w')          # first kept word after a filler trim
@@ -432,7 +474,62 @@ def hook_problems(story, sents, words):
         lead = words[w0]['start'] - story['clips'][0]['start_seconds']
         if lead > 0.4:
             problems.append(f'speech starts {lead:.1f}s in')
+    if strict:
+        problems += opener_rejects(sents, a, opening, genre)
     return problems
+
+
+# P0-3 deterministic opener rejects (edit layer 'hook_rejects'). Measured on our stalled Shorts:
+# an interview outro ("thank you for that, LADbible"), a Whisper continuation that starts
+# lower-case, and a jargon podcast opener ("Loss aversion never changes what you are loss
+# averse to") all passed the LLM's own hook label.
+_OUTRO_OPENER = re.compile(
+    r"^\W*(thank(s| you)\b|thanks for (having|watching|coming)|that'?s (a wrap|all\b|it for)|"
+    r"see you (next|soon|guys)|(good)?bye\b|subscribe\b|like and subscribe|"
+    r"(i|we) (will|'ll) walk away with|it'?s been (a pleasure|amazing|great|fun) (having|being|to)|"
+    r"what a (pleasure|treat) (to|it))", re.IGNORECASE)
+_OUTRO_ANYWHERE = re.compile(r"\b(thank you (so much )?for (having|that|this|watching)|thanks for having)\b",
+                             re.IGNORECASE)
+_JARGON = re.compile(
+    r"\b(aversion|averse|definition|defined|ego|paradigm|framework|cognitive|psycholog\w*|dopamine|"
+    r"neuro\w*|concept\w*|fundamental(ly)?|essential(ly)|inherent(ly)?|mechanism|dichotomy|heuristic|"
+    r"phenomen\w+|construct|existential|theoretical(ly)?|hypothes\w+|correlat\w+|metric|optimi[sz]\w*|"
+    r"abstract(ly)?|ideolog\w*|philosoph\w*|asymmetr\w*|valence|cognition|bias(es)?)\b",
+    re.IGNORECASE)
+_PERSON = re.compile(
+    r"\b(i|i'm|i've|i'd|me|my|you|your|you're|he|she|him|her|his|we|our|they|them|their|someone|"
+    r"somebody|people|guy|guys|girl|man|woman|kid|kids|mom|dad|mother|father|wife|husband|boyfriend|"
+    r"girlfriend|friend|boss|brother|sister|son|daughter)\b", re.IGNORECASE)
+OPENER_MAX_WORDS = 14
+# "We also do it in a lot of other areas", "That's why...", "Which is...": only make sense after
+# the line before (seen on a Mark Manson pick, 2026-10-26).
+_LEANS_BACK = re.compile(r"^\W*((?:\w+'?\w*\s+){0,2}(also|either|as well)\b|that'?s why\b|which\b|"
+                         r"it'?s the same\b|same thing\b|(?:\w+'?\w*\s+){1,4}too\W*$)", re.IGNORECASE)
+
+
+def opener_rejects(sents, a, opening=None, genre=None):
+    """Reasons the first sentence (S{a}) cannot open a Short (P0-3), [] when it can."""
+    s = sents[a]
+    raw = (s.get('text') or '').strip()
+    opening = (opening or raw).strip()
+    out = []
+    first = re.search(r'[A-Za-z]', raw)
+    if first and first.group(0).islower():
+        out.append(f'opens mid-sentence (lower-case "{raw[:30]}")')
+    elif a > 0 and not s.get('clean_start', True) and s['start'] - sents[a - 1]['end'] < 0.3:
+        out.append('opens mid-sentence (continues the line before)')
+    if _OUTRO_OPENER.search(opening) or _OUTRO_ANYWHERE.search(opening):
+        out.append('opens on an outro / thank-you line')
+    if _LEANS_BACK.search(opening):
+        out.append('opener leans on the line before ("also" / "too" / "that\'s why")')
+    if genre in ('podcast', 'talk'):
+        n = len(_words_of(opening))
+        jargon = _JARGON.search(opening)
+        if jargon:
+            out.append(f'opens on an abstract / jargon line ("{jargon.group(0)}")')
+        elif n > OPENER_MAX_WORDS and not _PERSON.search(opening):
+            out.append(f'abstract opener: {n} words and no person in it')
+    return out
 
 
 def overlap_problems(clips, used, max_frac=0.25, max_sec=3.0):
@@ -1154,8 +1251,9 @@ _CAMPAIGN_LAYER_RULES = {
     'bilf': ('Primary layer for this podcast: context_line is REQUIRED, it is the on-screen text hook for the first '
              '2.5 s (names the guest and the stake, matches what the clip delivers); closing_line is a question that '
              'invites a take. Never quotation marks around words that were not said verbatim. annotations: [].'),
-    'ladbible': ('This campaign shows no added text besides the captions and the brand watermark: context_line: '
-                 'null, closing_line: null, annotations: []. Put your framing into the header (kept for the logs).'),
+    'ladbible': ('This campaign shows no added text besides the hook headline (the header), the captions and the '
+                 'brand watermark: context_line: null, closing_line: null, annotations: []. The header must describe '
+                 'what really happens in the clip (the brand rejects misleading captions).'),
     'milkxp': ('Originality layer for this brand: the header (on screen the whole clip) names the creator and the '
                'challenge or situation, and builds suspense without giving away the outcome. context_line: null, '
                'closing_line: null, annotations: [] (the brief allows only a short hook). The header follows the '
@@ -1198,6 +1296,14 @@ def _example_json(campaign):
         'hook_strength': 8, 'payoff_strength': 8, 'standalone_clarity': 9,
         'rubric': {'stake': 2, 'payoff': 2, 'emotion': 2, 'framing': 2, 'originality': 2},
     }
+    edit = _edit(campaign)
+    if edit.get('headline') and edit.get('reaction_titles'):
+        head, kws, emo = _EDIT_HEADLINES.get(campaign, _EDIT_HEADLINE_DEFAULT)
+        cand['header'], cand['hook_emoji'] = head, emo
+        items = list(cand.items())                    # header_keywords goes next to the header
+        at = [k for k, _ in items].index('hook_emoji')
+        items.insert(at, ('header_keywords', kws))
+        cand = dict(items)
     return json.dumps({'candidates': [cand, '...2-4 more candidates in the same shape...']},
                       ensure_ascii=False, indent=2)
 
@@ -1208,12 +1314,54 @@ def _vague_rule():
             f'unless the concrete thing follows ("this sandwich" is fine, "he did this" is not)')
 
 
+def _edit(campaign):
+    """The campaign's edit-layer settings (campaigns.edit_config), every item off when unknown."""
+    try:
+        from campaigns import CAMPAIGNS, edit_config
+        return edit_config(CAMPAIGNS.get(campaign) or {})
+    except Exception:
+        return {}
+
+
+# Edit-layer headline examples (P0-2 / P0-7): curiosity or emotion from the reacting person's
+# point of view, never "<person> does X". Shape examples only (the model copies tone, not words).
+_EDIT_HEADLINES = {
+    'ladbible':   ('She was NOT ready for this', ['NOT', 'READY'], '😭'),
+    'milkxp':     ('They have ONE minute left and NO plan', ['ONE', 'NO'], '😳'),
+    'unpacked':   ("Every collector's WILDEST dream", ['WILDEST'], '😭'),
+    'markmanson': ('Why you can never WIN their approval', ['WIN'], ''),
+}
+_EDIT_HEADLINE_DEFAULT = ('He did NOT see that coming', ['NOT'], '😳')
+
+
+def _headline_rule(campaign, recent):
+    ex, kws, emo = _EDIT_HEADLINES.get(campaign, _EDIT_HEADLINE_DEFAULT)
+    return (f'- header (the on-screen HOOK HEADLINE, read in frame 0 over the clip): 3-8 words, a curiosity or '
+            f'emotion line from the point of view of the person reacting in the clip, e.g. "{ex}", "They made '
+            f'donuts... at a CAFE", "If it\'s not a yes, it\'s a no". Never a plain description ("John Cena tries a '
+            f'snack", "Mark Manson on failure"), never the reveal or the punchline. Mixed case, with the 1-2 words '
+            f'that carry the emotion in CAPS. No content word from payoff_line or reveal; {_vague_rule()} (a '
+            f'closing "this" that points at the clip is fine). Do not start with the same three words as a recent '
+            f'header: {recent}.\n'
+            f'- header_keywords: the 1-2 words of the header to colour (e.g. {json.dumps(kws)}), copied from it.\n'
+            f'- hook_emoji: at most one of 😭 😳 🤯 when it fits the emotion, else "" (about half the time "").')
+
+
 def _answer_rules(campaign, limits, target=None, genre=None, recent_headers=None):
     lo, hi = limits
     t_lo, t_hi = target or TARGET_SECONDS
     genre = genre or GENRES.get(campaign, 'sitcom')
+    edit = _edit(campaign)
+    tail = 1.5 if edit.get('length') else PAYOFF_MAX_TAIL
+    payoff_rule = (f'- payoff_sentence: the S-number of the punchline, reveal or verdict. It must be the LAST sentence '
+                   f'of the last clip (at most one short reaction line, under {tail:g} seconds, after it): the clip '
+                   f'loops on the payoff.' if edit.get('length') else
+                   '- payoff_sentence: the S-number of the punchline, reveal or verdict. The clip must end at most 3 '
+                   'seconds after it.')
     hooks = '; '.join(f'{k} = {v}' for k, v in HOOK_CLASSES.items())
     recent = '; '.join(f'"{h}"' for h in (recent_headers or [])[-30:]) or 'none yet'
+    header_rule = (_headline_rule(campaign, recent) if edit.get('headline') and edit.get('reaction_titles') else
+                   f'''- header (replaces hook_text): at most 9 words, ALL CAPS, no emoji, names a person and states the SITUATION or a STANCE (a side, a verdict, a superlative), never the reveal or the punchline. No content word from payoff_line or reveal; {_vague_rule()}. Do not start with the same three words as a recent header: {recent}.''')
     long_arc = (' Up to 60s only when single_story_arc is true (one escalating first-person story by one speaker) '
                 'and the payoff is in the last 30%.' if genre in ('podcast', 'talk') else '')
     return f"""
@@ -1223,14 +1371,14 @@ HOW TO PICK AND CUT (these rules override anything above):
 - Cut by sentence number, never by seconds. Each clip runs from "start_sentence" to "end_sentence" (S-numbers from the transcript, inclusive); code turns them into exact cut times.
 - start_sentence must begin a thought, never a line that continues the one before it. end_sentence must be a COMPLETE sentence that finishes the beat (the punchline, answer, verdict or reaction line), never a line that trails off or carries on into the next line.
 - Length: aim for {t_lo:.0f}-{t_hi:.0f} seconds in total (use the timestamps). Never under {lo:.0f}s or over {hi:.0f}s.{long_arc} Shorter wins when the moment is complete: end right on the payoff.
-- payoff_sentence: the S-number of the punchline, reveal or verdict. The clip must end at most 3 seconds after it.
+{payoff_rule}
 - The OPENING LINE is the hook. The first sentence of the first clip must stop a scrolling stranger on its own, with no context: an odd or bold claim, a direct question, an accusation or confession, or a line dropped into the middle of a tense moment. Speech starts in the first second.
 - hook_class: label what the first 3 seconds are, honestly: {hooks}. Never offer an SL candidate: start later, on the first question or conflict line.
 - The SECOND beat must escalate by about 5 seconds in: a reply, a twist, a reaction or a new stake, never more setup. Our retention data shows viewers leave between seconds 5 and 8 when the line after the hook is just context, so cut straight from the hook to the escalation.
 - Never open on filler ("so", "um", "uh", "okay", "well", "yeah", "and", "but", "like", "anyway", "alright"), a greeting, someone explaining or setting up what is about to happen, or a line that only makes sense after an earlier one. Cut the setup: the header supplies the context.
 - Pick a concrete situation with a specific stake (stake_line: a person and a concrete noun or event in 6-8 words), not an abstract idea or opinion. Emotion must be high-arousal (laughter, shock, cringe, outrage, tension, triumph) or wholesome WITH stakes. For drama and reality, prefer threat, stakes or a call-out over wholesome or low-stakes beats.
 - opening_line: the first sentence of the first clip, copied VERBATIM. payoff_line: the last sentence of the last clip, copied VERBATIM.
-- header (replaces hook_text): at most 9 words, ALL CAPS, no emoji, names a person and states the SITUATION or a STANCE (a side, a verdict, a superlative), never the reveal or the punchline. No content word from payoff_line or reveal; {_vague_rule()}. Do not start with the same three words as a recent header: {recent}.
+{header_rule}
 - reveal: what the ending reveals, in plain words (only used to check the header does not give it away).
 - ORIGINALITY LAYER (YouTube demotes clips that add nothing original). {_CAMPAIGN_LAYER_RULES.get(campaign) or _LAYER_RULES.get(genre, _LAYER_RULES['sitcom'])}
 - header, context_line, closing_line and annotations are YOUR voice: an opinion, context or a question. Never quote or paraphrase the dialogue, never narrate what is on screen, never mock or insult anyone in the clip.
@@ -1262,10 +1410,20 @@ def _title_rules(campaign, story, title_names, recent_titles, transcript=None):
     actor = (' For a scripted show name the ACTOR (e.g. "Matthew Perry\'s Chandler..."), not only the character.'
              if campaign == 'friends' else '')
     recent = '\n'.join(f'  - {t}' for t in (recent_titles or [])[-30:]) or '  (none yet)'
+    if _edit(campaign).get('reaction_titles'):
+        first = (f'- title: a FEELING or a general statement from the point of view of the person reacting in the clip '
+                 f'(e.g. "Jessica Biel was NOT ready for salty liquorice 😭", "If it\'s not a yes, it\'s a no", "Bro '
+                 f'was NOT ready for his grades 😭"), never "<Celebrity> does X" / "<Name> on Y" ("John Cena tries a '
+                 f'snack", "Mark Manson on failure"). Name one real person people search for ({names}) where it reads '
+                 f'naturally.')
+    else:
+        first = (f'- title: start with the real name US viewers search for, one of: {names}.{actor} Then the concrete '
+                 f'situation: a person and a specific object or event (e.g. "Matt LeBlanc\'s Joey dodges his Central '
+                 f'Perk bill").')
     return f"""
 
 TITLE AND HASHTAG RULES (these override the example and rules above):
-- title: start with the real name US viewers search for, one of: {names}.{actor} Then the concrete situation: a person and a specific object or event (e.g. "Matt LeBlanc's Joey dodges his Central Perk bill").
+{first}
 - title: under 60 characters, 1-2 emoji max and only at the end, no hashtags.
 - title: never start with "Wait", "Nobody", "No one", "POV", "When you" or "@", and never "did X really just say that".
 - title: {_vague_rule()}.

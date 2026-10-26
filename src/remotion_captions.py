@@ -122,16 +122,19 @@ def _cap_font_px(cap_px):
 
 
 def build_props(chunks, total, fps, caption_y, seam=0.0, center_x=530, cap_px=_CAP_PX,
-                lead=0.04, width=1080, band_h=_BAND_H):
+                lead=0.04, width=1080, band_h=_BAND_H, style='pop'):
     """
     Props JSON for the Captions composition. chunks: captioner._caption_chunks
     output (output seconds); fps: float. Words reveal `lead` s before they are
-    spoken (never before their chunk is up).
+    spoken (never before their chunk is up). style 'edit' (edit layer, EDIT_SPEC R3):
+    the chunk pops in (0.85 -> 1.0 over 80 ms, fade in over 60 ms) and only its keyword
+    is coloured: no moving spoken-word highlight. Words keep their on-screen case ('disp').
     """
     offset_y = int(round(caption_y - band_h / 2))
     out = []
     for ch in chunks:
-        lines = [[{'text': w['text'], 't': round(max(ch['s'], w['start'] - lead), 4), 'color': _hex(c)}
+        lines = [[{'text': w.get('disp', w['text']), 't': round(max(ch['s'], w['start'] - lead), 4),
+                   'color': _hex(c)}
                   for w, c in ln] for ln in ch['lines']]
         if lines and lines[0]:
             lines[0][0]['t'] = round(ch['s'], 4)          # the first word is up with its chunk
@@ -145,6 +148,7 @@ def build_props(chunks, total, fps, caption_y, seam=0.0, center_x=530, cap_px=_C
         'seam_s': round(float(seam or 0), 4), 'total_s': round(float(total), 4),
         'colors': {'base': '#FFFFFF', 'active': _ACTIVE},
         'chunks': out,
+        **({'style': 'edit'} if style == 'edit' else {}),
     }
 
 

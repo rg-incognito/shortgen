@@ -42,12 +42,64 @@ _RENDER_DEFAULTS = {
 def _render(niche, **overrides):
     # captions_engine: 'ass' (default) | 'remotion', or {slot 'HH:MM' ET: engine, '*': engine}
     # for a per-slot A/B (clipper.captions_engine). Remotion draws the captions only.
+    # edit: the edit layer (EDIT_FULL / EDIT_LIGHT below); absent = every edit item off.
     r = dict(_RENDER_DEFAULTS[niche])
     r.update({'allow_music': False, 'music_mode': 'off',
               'allow_sfx': False, 'sfx': {'payoff_boom': False, 'time_jump_flash': False},
               'max_duration': 60})
     r.update(overrides)
     return r
+
+
+# ---------------------------------------------------------------------------
+# Edit layer (shortGen_work/teardown/EDIT_SPEC.md, measured on 15 winning clip Shorts;
+# BACKLOG P0-1/2/3/5/7/9). One key per item, so each can be switched per campaign:
+#   length          P0-1: 13-18 s (cap 20), the payoff is the last sentence (tail <= 1.5 s)
+#   pace            first visual cut by 2.0 s, no framing held > 3.5 s: tight reframe cuts
+#                   (1.3-1.4x crop of the same take, face-centred) on sentence / phrase
+#                   boundaries when the source has no cut there
+#   headline        P0-2: hook headline in a top band from frame 0, 1-2 coloured keywords,
+#                   curiosity / emotion phrasing (only where the brief allows added text)
+#   headline_s      seconds the headline stays up (None: the whole clip)
+#   sfx             'full': whoosh on cuts, pop on the headline, boom on the payoff;
+#                   'cuts': whoosh on cuts only; False: none. Always mixed under the
+#                   original audio, ducked to <= -14 dB re voice under any word.
+#   sfx_gain_db     extra level offset for the campaign (subtle lanes are negative)
+#   flash           one <= 0.35 s light wash at the biggest beat change (the cut into the
+#                   payoff), a second one only on a 10 s+ clip at a story-clip join
+#   captions        1-3 words per screen, mixed case, sparse keyword colour, chunk pop-in,
+#                   no moving word highlight (ASS and Remotion)
+#   hook_rejects    P0-3: lowercase / mid-sentence / outro / jargon openers rejected; render
+#                   QA hard-fails no face in 0-1.5 s and source text under our captions in 0-3 s
+#   guest_cut       P0-5: a candidate that crosses a cut where the guests change is rejected
+#   reaction_titles P0-7: headline and title from the reacting person's point of view
+# The music bed is not part of it: allow_music stays False until licensed tracks exist
+# (clipper._music_bed has the ducking mixer; it never uses the files in music/).
+# ---------------------------------------------------------------------------
+EDIT_KEYS = ('length', 'pace', 'headline', 'sfx', 'flash', 'captions', 'hook_rejects', 'guest_cut',
+             'reaction_titles')
+EDIT_FULL = {'length': True, 'pace': True, 'headline': True, 'headline_s': None, 'sfx': 'full',
+             'sfx_gain_db': 0.0, 'flash': True, 'captions': True, 'hook_rejects': True, 'guest_cut': True,
+             'reaction_titles': True}
+# LADbible's real brief is unreadable ("all in Notion"): cuts + headline + SFX on cuts only, no
+# music, no flash, captions unchanged; length 13-18 s like the others (P0-1). The opener / guest-change rejects are selection
+# fixes (the spliced-guests Cena Short came from this source), so they stay on.
+EDIT_LIGHT = dict(EDIT_FULL, sfx='cuts', sfx_gain_db=-3.0, flash=False, captions=False)
+EDIT_OFF = {k: False for k in EDIT_KEYS}
+# P0-1 length for the edit layer (NICHE_LENGTH stays for the other campaigns)
+EDIT_LENGTH = {'target': (13, 18), 'max': 20}
+EDIT_PAYOFF_MAX_TAIL = 1.5
+
+
+def edit_config(profile_or_render):
+    """The edit-layer settings of a profile (or its render dict); every item off when it has none."""
+    r = profile_or_render or {}
+    if 'render' in r and 'niche' not in r:
+        r = r.get('render') or {}
+    e = r.get('edit') or {}
+    out = dict(EDIT_OFF, headline_s=None, sfx_gain_db=0.0)
+    out.update({k: v for k, v in e.items()})
+    return out
 
 
 # Length by niche: 16-25 s had the best viral rate (87%), and our own retention
@@ -220,7 +272,8 @@ CAMPAIGNS = {
         # Wide table shots: faces too small to detect -> show the whole shot.
         'wide_fallback':   True,
         # Brief needs 20s+ (the render check allows 1s under min_seconds).
-        'min_seconds':     21.0,
+        'min_seconds':     21.0,     # edit layer: the 13-18 s window moves to 21-22.5 s, cap 24 (brief floor)
+        'brief_min_seconds': 20.0,    # brief: 20 s+ (the edit-layer fallback floor)
         'max_seconds':     40.0,
         'sponsorblock':    True,
         'playlist':        'Solved with Mark Manson',
@@ -234,8 +287,11 @@ CAMPAIGNS = {
         'genre':           'podcast',
         # No on-screen text and ST openers (1 point): 8/12 reachable is the bar, not 11/16.
         'min_rubric':      8,
-        # Brief: full subtitles, Mark on screen in 5 s. Full-bleed, no added text.
-        'render':          _render('B', caption_preset='full_subs', names=['Mark', 'Manson']),
+        # Brief: full subtitles, Mark on screen in 5 s. "Add your own hook over the first frames
+        # if you want. Lead with the strongest line" (live brief, 2026-10-26): the edit layer's
+        # headline is up for the first 3 s only; subtle SFX (calm podcast lane).
+        'render':          _render('B', caption_preset='full_subs', names=['Mark', 'Manson'],
+                                   edit=dict(EDIT_FULL, headline_s=3.0, sfx_gain_db=-3.0)),
         # Big life questions are this show's topic, not a vague tease.
         'vague_exempt':    ['life'],
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/6bdc8e4b-3ebf-44f1-aedb-067589ca9c89',
@@ -313,8 +369,9 @@ CAMPAIGNS = {
         'archive':         False,
         'silence_thresh':  0.8,
         'wide_fallback':   True,
-        # Brief needs 7s+; 15s keeps a complete beat.
-        'min_seconds':     15.0,
+        # Brief needs 7s+; the edit layer aims at 13-18 s (P0-1: the Mewtwo winner ran 11 s).
+        'min_seconds':     13.0,
+        'brief_min_seconds': 8.0,     # "Under 7 seconds ... rejected": the edit-layer fallback floor
         'max_seconds':     40.0,
         'playlist':        'Unpacked',
         # Collectibles, younger male audience: late evening.
@@ -325,7 +382,8 @@ CAMPAIGNS = {
                             'PSA 10', 'booster pack', 'trading cards'],
         'genre':           'talk',
         'min_rubric':      8,       # no on-screen text: 8 of the 12 reachable points
-        'render':          _render('B', names=['MatCrackz', 'Aoki', 'YourRAGE', 'Dobrik']),
+        # The brief rewards "fast-paced" editing and rejects "weak/lazy editing": the full edit layer.
+        'render':          _render('B', names=['MatCrackz', 'Aoki', 'YourRAGE', 'Dobrik'], edit=dict(EDIT_FULL)),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/c85645f1-b75f-49e2-91d5-988cf9b3fadb',
         # Each episode is its own Whop campaign; submitting to the wrong one is a ban.
         'whop_campaigns': {
@@ -622,7 +680,10 @@ CAMPAIGNS = {
                                               'pos': 'top'},
                                    # A/B (2026-10-25): the 23:15 slot gets the Remotion captions (word
                                    # pops, captions only, no added text); 22:30 keeps ASS as the control.
-                                   captions_engine={'23:15': 'remotion', '*': 'ass'}),
+                                   captions_engine={'23:15': 'remotion', '*': 'ass'},
+                                   # Light edit layer (user decision 2026-10-26): cuts, the headline,
+                                   # SFX on cuts only; no music, no flash, captions unchanged.
+                                   edit=dict(EDIT_LIGHT)),
         'whop_campaign':   'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/c/campaigns/187d5d23-22c6-4dfb-9e32-cf296a3fb0b7',
         # Paid brand content: tick YouTube's "includes paid promotion" (user decision 2026-10-24).
         'paid_promotion':  True,
@@ -700,7 +761,9 @@ CAMPAIGNS = {
                                    watermark={'file': 'assets/watermarks/milkxp.png', 'width_frac': 0.62,
                                               'pos': 'top'},
                                    # A/B (2026-10-25): 18:45 Remotion captions, 19:45 ASS control.
-                                   captions_engine={'18:45': 'remotion', '*': 'ass'}),
+                                   captions_engine={'18:45': 'remotion', '*': 'ass'},
+                                   # Regulated brand: subtle SFX, the speech always clear.
+                                   edit=dict(EDIT_FULL, sfx_gain_db=-3.0)),
         # The brief asks for two kinds of clips: runs alternate which one is wanted (the analyzer
         # is asked for both; the run's type wins when one of those passes every rule).
         'clip_types': {
@@ -1011,6 +1074,10 @@ _BROAD_TAGS = {'funny', 'funny moments', 'comedy', 'viral', 'trending', 'shorts'
 MAX_HASHTAGS = 5
 TITLE_MAX = 60
 _BANNED_OPENERS = re.compile(r"^\W*(wait\b|nobody\b|no one\b|pov\b|when you\b|@)", re.IGNORECASE)
+# "<Celebrity> does X": a description of the clip, not the reaction (P0-7, benchmark §4.3).
+_DESCRIBES = re.compile(
+    r"^\W*(?:[\w'.$-]+\s+){1,3}?(?:tries|tried|does|eats|tastes|explains|talks about|struggles with|"
+    r"on how|on why|reacts to|discusses)\b", re.IGNORECASE)
 _EMOJI = re.compile('[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍]')
 _STOP = set("""about after again also always another around because been before being came come could
 didn doesn don does done down even ever every from gets getting going gonna gotta have here into just
@@ -1095,7 +1162,14 @@ def title_problems(title, profile, prior_titles=(), payoff_line='', campaign_tit
     if len(title) > TITLE_MAX:
         soft.append(f'{len(title)} chars > {TITLE_MAX}')
     names = profile.get('title_names') or []
-    if names and not any(n.lower() in title[:35].lower() for n in names):
+    if edit_config(profile).get('reaction_titles'):
+        # P0-7: a feeling or general statement from the reactor's point of view; the searched
+        # name may sit anywhere in it ("Jessica Biel was NOT ready for this snack").
+        if _DESCRIBES.search(title or ''):
+            soft.append('describes "<person> does X" instead of the reaction')
+        if names and not any(n.lower() in (title or '').lower() for n in names):
+            soft.append('names nobody people search for')
+    elif names and not any(n.lower() in title[:35].lower() for n in names):
         soft.append('does not lead with the show or a real name')
     return hard, soft
 
@@ -1157,13 +1231,17 @@ HEADER_OPENER_WORDS = 3
 HEADER_OPENER_LOOKBACK = 30
 
 
-def vague_hits(text, exempt=()):
-    """Vague tease words in text that have no concrete object after them."""
+def vague_hits(text, exempt=(), deictic_end=False):
+    """Vague tease words in text that have no concrete object after them. deictic_end (the
+    edit layer's reaction headline, read over the clip itself): a closing "this" / "that"
+    points at what is on screen ("She was NOT ready for this") and is allowed."""
     words = re.findall(r"[a-z0-9$']+", (text or '').lower().replace('’', "'"))
     skip = {w.lower() for w in exempt}
     hits = []
     for i, w in enumerate(words):
         if w in skip:
+            continue
+        if deictic_end and i == len(words) - 1 and w in ('this', 'that'):
             continue
         if w in VAGUE_ALWAYS:
             hits.append(w)
@@ -1208,9 +1286,12 @@ def header_problems(story, profile, prior_headers=()):
     n = len(norm_title(header).split())
     if n > HEADER_MAX_WORDS:
         problems.append(f'header is {n} words > {HEADER_MAX_WORDS}')
-    vague = vague_hits(header, profile.get('vague_exempt', ()))
+    reaction = bool(edit_config(profile).get('reaction_titles') and edit_config(profile).get('headline'))
+    vague = vague_hits(header, profile.get('vague_exempt', ()), deictic_end=reaction)
     if vague:
         problems.append(f'header uses vague words {vague}')
+    if reaction and _DESCRIBES.search(header):
+        problems.append('header describes the clip ("<person> tries / does ..."), not the reaction')
     # The header must name a person, who is usually in the payoff and the reveal too: proper
     # names (profile names, capitalised words in the reveal, mid-sentence capitals in the
     # dialogue) are not spoilers.
@@ -1414,8 +1495,30 @@ def render_config(profile):
     return profile.get('render') or _render('A')
 
 
+def header_on(profile):
+    """True when the render shows the header on screen (the A1 band, or the edit layer's headline)."""
+    render = render_config(profile)
+    return bool(render.get('header') or edit_config(render).get('headline'))
+
+
+def payoff_max_tail(profile):
+    """Seconds the clip may run past the payoff sentence (P0-1: 1.5 with the edit layer's length)."""
+    from analyzer import PAYOFF_MAX_TAIL
+    return EDIT_PAYOFF_MAX_TAIL if edit_config(profile).get('length') else PAYOFF_MAX_TAIL
+
+
 def length_plan(profile):
-    """(min_seconds, hard max, target range) for the profile's niche, inside the brief's own limits."""
+    """(min_seconds, hard max, target range) for the profile's niche, inside the brief's own limits.
+    The edit layer's length (P0-1) aims at 13-18 s with a 20 s cap; a brief minimum above that
+    (Mark Manson: 20 s+) wins and moves the window up to just over it."""
+    if edit_config(profile).get('length'):
+        lo = profile.get('min_seconds') or 12.0
+        t_lo = max(EDIT_LENGTH['target'][0], lo)
+        t_hi = max(EDIT_LENGTH['target'][1], t_lo + 1.5)
+        hi = max(EDIT_LENGTH['max'], t_hi + 1.5)
+        if profile.get('max_seconds'):
+            hi = min(hi, profile['max_seconds'])
+        return lo, hi, (t_lo, max(t_lo, min(t_hi, hi)))
     niche = NICHE_LENGTH[render_config(profile).get('niche', 'A')]
     lo = profile.get('min_seconds') or 12.0
     hi = min(profile.get('max_seconds') or niche['max'], niche['max'])
@@ -1425,9 +1528,12 @@ def length_plan(profile):
 
 
 def story_max_seconds(story, profile):
-    """Hard max for this story: the niche max, or up to 60 s for a single long arc in niche B."""
+    """Hard max for this story: the niche max, or up to 60 s for a single long arc in niche B
+    (never with the edit layer's length: short wins there)."""
     _, hi, _ = length_plan(profile)
     render = render_config(profile)
+    if edit_config(render).get('length'):
+        return hi
     if (render.get('niche') == 'B' and story.get('single_story_arc')
             and story.get('_payoff_pos', 0) >= LONG_ARC_PAYOFF_POS):
         return min(LONG_ARC_MAX, float(render.get('max_duration') or LONG_ARC_MAX))
@@ -1441,7 +1547,7 @@ def layer_caps(profile):
     originality needs the overlay lines, which only overlays_allowed renders.
     """
     render = render_config(profile)
-    shows_text = bool(render.get('header') or render.get('overlays_allowed'))
+    shows_text = bool(header_on(profile) or render.get('overlays_allowed'))
     return (2 if shows_text else 0), (2 if render.get('overlays_allowed') else 0)
 
 
