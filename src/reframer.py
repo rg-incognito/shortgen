@@ -569,7 +569,9 @@ def _blur_fill(frame, out_w, out_h):
     small = cv2.resize(frame, (max(1, int(w * scale / 10)), max(1, int(h * scale / 10))),
                        interpolation=cv2.INTER_AREA)
     small = cv2.GaussianBlur(small, (0, 0), 4)
-    bg = cv2.resize(small, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LINEAR)
+    # never smaller than the output: int() truncation left a 1-px-short cover and an empty slice
+    bw, bh = max(out_w, int(np.ceil(w * scale))), max(out_h, int(np.ceil(h * scale)))
+    bg = cv2.resize(small, (bw, bh), interpolation=cv2.INTER_LINEAR)
     oy, ox = (bg.shape[0] - out_h) // 2, (bg.shape[1] - out_w) // 2
     bg = (bg[oy:oy + out_h, ox:ox + out_w] * 0.55).astype(np.uint8)
     fg_h = min(out_h, int(round(out_w * h / w)))

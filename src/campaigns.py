@@ -652,7 +652,7 @@ CAMPAIGNS = {
             # leading '-' of the id (a leading dash reads as a flag to gh).
             ('ladbible_jNqG2Dx1t8', 'LADBIBLE_CENA_BIEL_SNACKWARS'),
         ],
-        'max_runs':        5,
+        'max_runs':        8,         # one 11-min episode; 5 used up by 2026-10-30 (used segments are avoided)
         'archive':         False,
         'silence_thresh':  0.6,
         # Two people side by side at a table: show the whole shot when faces are small.
@@ -726,7 +726,7 @@ CAMPAIGNS = {
             # WeTransfer "MilkPEP_milkXP_Episode3_YT_16x9.mp4" (9:38, 1080p), re-encoded to 720p H.264.
             ('milkxp_ep3', 'MILKXP_EP3'),
         ],
-        'max_runs':        6,
+        'max_runs':        10,        # one 9:38 episode; 6 used up by 2026-10-29 (used segments are avoided)
         'archive':         False,
         'silence_thresh':  0.8,
         'wide_fallback':   True,
