@@ -23,15 +23,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-#          task name        start (IST)  run_local.py arguments                              slot ET  slot UTC (EDT/EST)
+# 2026-10-31: the Whop campaigns are retired; this PC posts two podcast Shorts a day on its own
+# (GitHub Actions minutes are used up). Each run picks/downloads/transcribes/renders in the IST
+# afternoon, while the laptop is in use, and uploads the Short scheduled for its US-evening slot.
+#          task name          start (IST)  run_local.py arguments           slot ET (UTC EDT/EST)
 $tasks = @(
-    @{ Name = 'MILKXP 1845';   At = '02:15'; Args = 'milkxp --slot 18:45 --if-gh-missed 16:42' }    # 22:45 / 23:45
-    @{ Name = 'MILKXP 1945';   At = '03:15'; Args = 'milkxp --slot 19:45 --if-gh-missed 17:42' }    # 23:45 / 00:45
-    @{ Name = 'MM 2000';       At = '03:30'; Args = 'markmanson --if-gh-missed 17:57' }             # 00:00 / 01:00
-    @{ Name = 'UNPACKED 2100'; At = '04:30'; Args = 'unpacked --if-gh-missed 18:57' }               # 01:00 / 02:00
-    @{ Name = 'LADBIBLE 2230'; At = '06:00'; Args = 'ladbible --slot 22:30 --if-gh-missed 20:27' }  # 02:30 / 03:30
-    @{ Name = 'LADBIBLE 2315'; At = '06:45'; Args = 'ladbible --slot 23:15 --if-gh-missed 21:12' }  # 03:15 / 04:15
+    @{ Name = 'PODCASTS 1900'; At = '14:00'; Args = 'podcasts --slot 19:00' }    # 23:00 / 00:00
+    @{ Name = 'PODCASTS 2200'; At = '17:30'; Args = 'podcasts --slot 22:00' }    # 02:00 / 03:00
 )
+# Old Whop fallback tasks that are no longer in $tasks are removed.
+$retired = @('MILKXP 1845', 'MILKXP 1945', 'MM 2000', 'UNPACKED 2100', 'LADBIBLE 2230', 'LADBIBLE 2315')
 
 if (-not (Test-Path $Python)) { throw "Python not found at $Python" }
 if (-not (Test-Path (Join-Path $Repo 'run_local.py'))) { throw "run_local.py not found in $Repo" }
@@ -41,10 +42,18 @@ $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 3) `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 4) `
     -MultipleInstances IgnoreNew
 # Runs as you, only while you are signed in to Windows (same as the existing tasks; no password stored).
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+
+foreach ($r in $retired) {
+    $name = "$Prefix$r"
+    if ((Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) -and $PSCmdlet.ShouldProcess($name, 'unregister')) {
+        Unregister-ScheduledTask -TaskName $name -Confirm:$false
+        Write-Host "removed     $name"
+    }
+}
 
 foreach ($t in $tasks) {
     $name = "$Prefix$($t.Name)"

@@ -785,6 +785,41 @@ CAMPAIGNS = {
         'transcript_banned': _MILK_AUDIO_BANS,
     },
 
+    # Our own channel (no Whop brief): Gemini picks a popular podcast episode from the last two
+    # weeks on YouTube (src/podcast_pick.py), this PC downloads it, and each episode gives up to
+    # max_runs Shorts. Two a day, laptop only (GitHub Actions minutes are used up).
+    'podcasts': {
+        'source':          'youtube_pick',
+        'files':           [],           # filled from logs/podcast_picks.json (podcast_pick.apply_picks)
+        'pick_queries':    ['podcast', 'podcast interview', 'podcast episode full'],
+        'pick_niche':      ('English talk podcasts with famous hosts and guests (celebrities, comedians, '
+                            'athletes, creators, self-improvement): funny, shocking or emotional stories'),
+        'pick_days':       14,
+        'pick_minutes':    (20, 100),    # this PC transcribes the whole episode once (medium.en on CPU)
+        'max_runs':        4,
+        'archive':         False,
+        'silence_thresh':  0.6,
+        'wide_fallback':   True,
+        'min_seconds':     13.0,
+        'brief_min_seconds': 8.0,
+        'max_seconds':     40.0,
+        'sponsorblock':    True,
+        'playlist':        'Podcast Moments',
+        'publish_slots_et': ['19:00', '22:00'],
+        'genre':           'podcast',
+        'min_rubric':      8,
+        'render':          _render('B', edit=dict(EDIT_FULL)),
+        'caption_footer':  '🎙 {guest} on {show}\n\n#podcast #shorts',
+        'transcript_banned': [
+            r'promo code', r'use code', r'brought to you by', r'sponsor', r'dot com slash',
+            r'link in (the )?description', r'percent off', r'free trial',
+        ],
+        'banned_patterns': [
+            r'\bsponsor', r'promo code', r'\bclickbait\b', r'\bnsfw\b',
+            r'\btrump\b', r'\bbiden\b', r'\bharris\b', r'\bdemocrat', r'\brepublican',
+        ],
+    },
+
     # Runway/craft footage with no speech, so these are hand-cut by scripts/jacobco_edits.py and
     # uploaded directly; the profile only maps their episode names for whop_queue.
     # Submissions close Fri 2026-10-23 11:59 PM ET. No demographics ticket (stats come from Content Rewards).
@@ -979,7 +1014,9 @@ def enforce_caption(yt_meta, profile, episode=None):
     desc = yt_meta.get('description', '')
     missing = [r for r in required if r.lower() not in desc.lower()]
     if missing:
-        footer = profile['caption_footer'].replace('{guest}', episode_guest(profile, episode) or 'This guest')
+        notes = (profile.get('episode_notes') or {}).get(episode or '') or {}
+        footer = (profile['caption_footer'].replace('{guest}', episode_guest(profile, episode) or 'This guest')
+                  .replace('{show}', notes.get('show') or 'the full episode'))
         yt_meta['description'] = desc.rstrip() + '\n\n' + footer
     return yt_meta
 

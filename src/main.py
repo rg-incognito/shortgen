@@ -29,6 +29,7 @@ from campaigns import (get_campaign, find_banned, find_transcript_banned, enforc
                        clip_type_for_run, clip_type_hint, comments_allowed, whisper_hints, whisper_models,
                        edit_config, header_on, payoff_max_tail)
 from footage import download_from_release, sponsor_segments
+import podcast_pick
 from scheduling import merge_bookings, slot_filled, start_blocked, choose_publish_time
 
 try:   # render side (Coder B); absent until that branch is merged
@@ -968,6 +969,9 @@ def main():
             if not video_file_id:
                 print(f"Every {campaign} episode has reached {max_runs} runs — add footage or raise max_runs.")
                 sys.exit(0)
+        elif profile['source'] == 'youtube_pick':
+            print(f"[0/5] Picking a podcast episode (Gemini over YouTube's popular recent episodes)...")
+            video_file_id, episode_name = podcast_pick.pick(profile, tracker, max_runs, gemini_api_key)
         else:
             print("[0/5] Auto-picking video from videos/ folder...")
             video_file_id, episode_name = pick_video(VIDEOS_FOLDER_ID, service_account_info, tracker, max_runs=max_runs)
@@ -1001,6 +1005,8 @@ def main():
             print(f"      Local footage: {video_path}")
         elif profile['source'] == 'release':
             download_from_release(profile['release_tag'], f"{video_file_id}.mp4", str(video_path))
+        elif profile['source'] == 'youtube_pick':
+            podcast_pick.download(video_file_id, str(video_path))
         else:
             download_video(video_file_id, str(video_path), service_account_info)
         print(f"      {video_path.stat().st_size / 1e6:.1f} MB")

@@ -3,6 +3,21 @@
 How the Whop Content Rewards setup works, what runs on its own, and what needs a human
 (or Claude) to keep earning. Written 2026-10-18.
 
+> **2026-10-31: Whop clipping is retired.** The channel now posts two Shorts a day from this
+> laptop only (the GitHub workflow is disabled: Actions minutes are used up). Campaign
+> `podcasts` (src/campaigns.py): Gemini picks a popular podcast episode from YouTube's last two
+> weeks (src/podcast_pick.py, picks kept in logs/podcast_picks.json), yt-dlp downloads it, and
+> the normal pipeline + edit layer clips it, up to 4 Shorts per episode.
+>
+> | Task (Windows Task Scheduler) | Starts (IST) | Publishes (ET) |
+> |---|---|---|
+> | shortGen fallback PODCASTS 1900 | 14:00 | 19:00 |
+> | shortGen fallback PODCASTS 2200 | 17:30 | 22:00 |
+>
+> Re-register with `scripts/register_fallback_tasks.ps1`. The laptop must be on and signed in
+> at the start times (a missed start runs when the laptop comes back). The rest of this file
+> describes the old Whop setup.
+
 ## What runs on its own
 
 | Piece | Where | What it does |
