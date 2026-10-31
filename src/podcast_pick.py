@@ -149,7 +149,7 @@ def download(video_id, output_path):
     out = str(Path(output_path).with_suffix(''))
     opts = {'format': 'bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/b[height<=720]',
             'merge_output_format': 'mp4', 'outtmpl': out + '.%(ext)s', 'quiet': True,
-            'no_warnings': True, 'noplaylist': True, 'retries': 5}
+            'no_warnings': True, 'noprogress': True, 'noplaylist': True, 'retries': 5}
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
     if not os.path.exists(output_path):
